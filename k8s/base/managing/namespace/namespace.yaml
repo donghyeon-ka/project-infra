@@ -2,3 +2,15 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: mnt
+  labels:
+    app.kubernetes.io/name: mnt
+    app.kubernetes.io/instance: mnt
+    app.kubernetes.io/component: namespace
+    app.kubernetes.io/part-of: infra-platform
+    app.kubernetes.io/managed-by: kustomize
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest

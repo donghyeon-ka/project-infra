@@ -1,0 +1,22 @@
+# Project-Infra kube-linter configuration.
+# Applied by k8s/scripts/ci/validate.sh.
+#
+# Rationale for disabled checks:
+#   dangling-service / non-existent-service-account / mismatching-selector
+#     kube-linter analyses each rendered YAML as an isolated graph. Our
+#     Kustomize overlays intentionally split a Deployment, its Service, and
+#     its ServiceAccount across multiple files, which trips these checks
+#     even when the final cluster state is consistent.
+#
+#   no-anti-affinity
+#     We prefer topologySpreadConstraints over podAntiAffinity for pod
+#     spreading (Kubernetes upstream guidance). kube-linter 0.7.x does not
+#     yet understand topologySpreadConstraints as a valid substitute.
+
+checks:
+  doNotAutoAddDefaults: false
+  exclude:
+    - "dangling-service"
+    - "non-existent-service-account"
+    - "mismatching-selector"
+    - "no-anti-affinity"

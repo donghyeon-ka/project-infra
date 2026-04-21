@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: docker-registry-ingress-intra
+  labels:
+    app.kubernetes.io/name: docker-registry
+    app.kubernetes.io/instance: docker-registry
+    app.kubernetes.io/component: registry
+    app.kubernetes.io/part-of: platform-registry
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: docker-registry
+      app.kubernetes.io/instance: docker-registry
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 5000

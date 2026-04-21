@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - serviceaccount.yaml
+  - vault-connection.yaml
+  - vault-auth.yaml
+  - vault-static-secret-htpasswd.yaml
+  - vault-static-secret-pull-cred.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: vault-secrets-operator
+      app.kubernetes.io/instance: vso
+      app.kubernetes.io/version: "0.9.0"
+      app.kubernetes.io/component: secret-delivery
+      app.kubernetes.io/part-of: security-platform
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false
+    includeTemplates: true

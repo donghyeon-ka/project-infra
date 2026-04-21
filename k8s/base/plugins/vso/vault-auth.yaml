@@ -1,0 +1,41 @@
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: vault-auth-registry
+spec:
+  vaultConnectionRef: vault-connection
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: vso-registry
+    serviceAccount: vault-secrets-operator
+    audiences:
+      - vault
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: vault-auth-auth-platform
+spec:
+  vaultConnectionRef: vault-connection
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: vso-auth-platform
+    serviceAccount: vault-secrets-operator
+    audiences:
+      - vault
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: vault-auth-storage
+spec:
+  vaultConnectionRef: vault-connection
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: vso-storage
+    serviceAccount: vault-secrets-operator
+    audiences:
+      - vault

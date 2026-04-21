@@ -1,2 +1,21 @@
+# Secrets — must never be committed.
 vault-init-keys.json
+*.unseal-keys.json
+*.root-token
+
+# Terraform state (if local backend is used for dev only).
+.terraform-state/
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# Tooling caches.
 .codex
+.kube/
+.DS_Store
+
+# IDE / editor.
+.idea/
+.vscode/
+*.swp

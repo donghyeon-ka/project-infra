@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/instance: vault
+  ports:
+    - name: http
+      port: 8200
+      targetPort: http
+      protocol: TCP
+      appProtocol: http
+    - name: cluster
+      port: 8201
+      targetPort: cluster
+      protocol: TCP
+      appProtocol: http

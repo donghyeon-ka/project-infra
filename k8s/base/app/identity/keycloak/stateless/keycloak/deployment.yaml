@@ -1,0 +1,146 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  labels:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/instance: keycloak
+    app.kubernetes.io/version: "26.0.7"
+    app.kubernetes.io/component: identity-provider
+    app.kubernetes.io/part-of: auth-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 600
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+      app.kubernetes.io/instance: keycloak
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: keycloak
+        app.kubernetes.io/instance: keycloak
+        app.kubernetes.io/version: "26.0.7"
+        app.kubernetes.io/component: identity-provider
+        app.kubernetes.io/part-of: auth-platform
+        app.kubernetes.io/managed-by: kustomize
+    spec:
+      serviceAccountName: keycloak-sa
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+              app.kubernetes.io/instance: keycloak
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.0.7
+          imagePullPolicy: IfNotPresent
+          args:
+            - start
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: health
+              containerPort: 9000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: keycloak-config
+          env:
+            - name: KC_DB_PASSWORD_FILE
+              value: /etc/keycloak/db/password
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME_FILE
+              value: /etc/keycloak/admin/KEYCLOAK_ADMIN
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD_FILE
+              value: /etc/keycloak/admin/KEYCLOAK_ADMIN_PASSWORD
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          startupProbe:
+            httpGet:
+              path: /health/started
+              port: health
+              scheme: HTTP
+            periodSeconds: 5
+            failureThreshold: 60
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+              scheme: HTTP
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+              scheme: HTTP
+            periodSeconds: 30
+            failureThreshold: 3
+            timeoutSeconds: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: db-secret
+              mountPath: /etc/keycloak/db
+              readOnly: true
+            - name: admin-secret
+              mountPath: /etc/keycloak/admin
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /opt/keycloak/data
+      volumes:
+        - name: db-secret
+          secret:
+            secretName: keycloak-db
+            defaultMode: 0400
+        - name: admin-secret
+          secret:
+            secretName: keycloak-bootstrap-admin
+            defaultMode: 0400
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+        - name: data
+          emptyDir:
+            sizeLimit: 512Mi

@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mnt
+
+resources:
+  - ../../../base/plugins/vault
+  - networkpolicy.yaml
+
+patches:
+  - target:
+      kind: StatefulSet
+      name: vault
+    patch: |-
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 1Gi

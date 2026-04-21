@@ -1,8 +1,0 @@
-apiVersion: secrets.hashicorp.com/v1beta1
-kind: VaultConnection
-metadata:
-  name: vault-connection
-  namespace: mnt
-spec:
-  address: http://vault.mnt.svc.cluster.local:8200
-  skipTLSVerify: false

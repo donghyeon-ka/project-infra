@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - tenant.yaml
+labels:
+  - pairs:
+      app.kubernetes.io/name: minio
+      app.kubernetes.io/instance: minio
+      app.kubernetes.io/version: "2025.01.20"
+      app.kubernetes.io/component: object-storage
+      app.kubernetes.io/part-of: storage-platform
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false
+    includeTemplates: true

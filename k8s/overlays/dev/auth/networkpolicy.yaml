@@ -1,0 +1,61 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: auth-server-egress
+  labels:
+    app.kubernetes.io/name: auth-server
+    app.kubernetes.io/instance: auth-server
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: auth-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: auth-server
+      app.kubernetes.io/instance: auth-server
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: identity-postgres
+              app.kubernetes.io/instance: identity-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: keycloak
+              app.kubernetes.io/instance: keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: migration-flyway-egress
+  labels:
+    app.kubernetes.io/name: migration-flyway
+    app.kubernetes.io/instance: migration-flyway
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/part-of: auth-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: migration-flyway
+      app.kubernetes.io/instance: migration-flyway
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: identity-postgres
+              app.kubernetes.io/instance: identity-postgres
+      ports:
+        - protocol: TCP
+          port: 5432

@@ -1,0 +1,51 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minio-ingress-clients
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/instance: minio
+    app.kubernetes.io/component: object-storage
+    app.kubernetes.io/part-of: storage-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      v1.min.io/tenant: minio
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: auth-platform
+      ports:
+        - protocol: TCP
+          port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minio-egress-peer
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/instance: minio
+    app.kubernetes.io/component: object-storage
+    app.kubernetes.io/part-of: storage-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      v1.min.io/tenant: minio
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              v1.min.io/tenant: minio
+      ports:
+        - protocol: TCP
+          port: 9000
+        - protocol: TCP
+          port: 9001

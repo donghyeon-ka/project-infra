@@ -1,0 +1,7 @@
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultConnection
+metadata:
+  name: vault-connection
+spec:
+  address: http://vault:8200
+  skipTLSVerify: false

@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - serviceaccount.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+labels:
+  - pairs:
+      app.kubernetes.io/name: keycloak
+      app.kubernetes.io/instance: keycloak
+      app.kubernetes.io/version: "26.0.7"
+      app.kubernetes.io/component: identity-provider
+      app.kubernetes.io/part-of: auth-platform
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false
+    includeTemplates: true
