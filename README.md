@@ -221,28 +221,25 @@ vault write auth/kubernetes/config \
 
 vault secrets enable -path=secret kv-v2                   (idempotent 체크)
 
-# policy 3개 (역할별 least-privilege)
-vault policy write vso-registry      - < docker-registry/* read
+# policy 2개 (역할별 least-privilege)
 vault policy write vso-auth-platform - < identity-postgres/* + auth-server/* + keycloak/* read
 vault policy write vso-storage       - < minio/* read
 
-# role 3개 (같은 SA, 다른 policy)
-vault write auth/kubernetes/role/vso-registry      policies=vso-registry      bound_sa=vault-secrets-operator/mnt ttl=1h
+# role 2개 (같은 SA, 다른 policy)
 vault write auth/kubernetes/role/vso-auth-platform policies=vso-auth-platform bound_sa=vault-secrets-operator/mnt ttl=1h
 vault write auth/kubernetes/role/vso-storage       policies=vso-storage       bound_sa=vault-secrets-operator/mnt ttl=1h
 ```
 
 ### VaultAuth / VaultStaticSecret 매핑
 
-policy 분리에 따라 VaultAuth CR 도 3 개이며 각 VaultStaticSecret 은 자기 도메인의 VaultAuth 를 참조한다:
+policy 분리에 따라 VaultAuth CR 도 2 개이며 각 VaultStaticSecret 은 자기 도메인의 VaultAuth 를 참조한다:
 
 | VaultAuth CR | Vault role | 참조하는 VaultStaticSecret |
 |---|---|---|
-| `vault-auth-registry` | `vso-registry` | `docker-registry-htpasswd`, `registry-pull-credential` |
 | `vault-auth-auth-platform` | `vso-auth-platform` | `identity-postgres-superuser`, `keycloak-db-creds`, `auth-server-db-creds`, `keycloak-bootstrap-admin` |
 | `vault-auth-storage` | `vso-storage` | `minio-tenant-env` |
 
-VSO Operator SA (`vault-secrets-operator`) 는 한 개이지만 Vault 쪽에서 role 별로 policy 가 분리되어 있어 각 도메인의 secret 만 읽을 수 있다. Registry 자격증명이 유출돼도 DB 나 MinIO secret 은 보호된다.
+VSO Operator SA (`vault-secrets-operator`) 는 한 개이지만 Vault 쪽에서 role 별로 policy 가 분리되어 있어 각 도메인의 secret 만 읽을 수 있다. auth-platform 토큰이 유출돼도 MinIO secret 은 보호된다.
 
 ---
 
@@ -255,12 +252,14 @@ HashiCorp 공식 Operator. Vault KV → K8s Secret 자동 동기화.
 `VaultConnection` / `VaultAuth` / `VaultStaticSecret` 은 VSO Helm 설치로 CRD 가 등록된 뒤에만 apply 할 수 있다. 그래서 `overlays/dev/vso/` 는 `overlays/dev/kustomization.yaml` 집계에 포함되지 않으며, `bin/bootstrap.sh` 마지막 단계에서 별도로 `kubectl apply -k overlays/dev/vso/` 한다.
 
 ```
-Phase 1 : kubectl apply -k overlays/dev/              (namespace + vault + registry + 앱)
-Phase 2 : vault-0 Ready 대기
-Phase 3 : tasks/vault-init.sh                          (init + unseal + auth + policy/role)
-Phase 4 : tasks/vault-seed-registry.sh                 (htpasswd 생성 → Vault KV)
-Phase 5 : tasks/vso-install.sh                         (helm upgrade --install)
-Phase 6 : kubectl apply -k overlays/dev/vso/           (CRDs)
+Phase 0 : MinIO Operator Helm install                  (tasks/minio-operator-install.sh)
+Phase 1 : kubectl apply -k base/managing/namespace/    (PSS 라벨 선행)
+Phase 2 : 기존 VSO-managed Secret 점검                  (RESET_STALE_SECRETS=yes 로 삭제)
+Phase 3 : kubectl apply -k overlays/<env>/              (vault + registry + 앱)
+Phase 4 : vault-0 Running 대기
+Phase 5 : tasks/vault-init.sh                           (init + unseal + auth + policy × 2 + role × 2)
+Phase 6 : tasks/vso-install.sh                          (helm upgrade --install)
+Phase 7 : kubectl apply -k overlays/<env>/vso/          (CRDs)
 ```
 
 ### VaultConnection address
@@ -269,10 +268,7 @@ base 는 `http://vault:8200` (짧은 이름) 만 둔다. VSO Operator Pod 가 �
 
 ### VSO 가 관리하는 Secret
 
-| VaultStaticSecret (base) | Vault 경로 | K8s Secret | 소비 방식 |
-|---|---|---|---|
-| `docker-registry-htpasswd` | `secret/docker-registry/auth` | `docker-registry-htpasswd` | volume mount (`/auth/htpasswd`) |
-| `registry-pull-credential` | `secret/docker-registry/pull-credentials` | `registry-pull-credential` (`kubernetes.io/dockerconfigjson`) | `imagePullSecrets` 참조 |
+Registry 는 auth 없이 운영 (NetworkPolicy 로 `mnt` 내부 전용 보호) 이라 base 에 VaultStaticSecret 없음.
 
 | VaultStaticSecret (dev overlay) | Vault 경로 | K8s Secret | 소비 방식 |
 |---|---|---|---|
@@ -299,24 +295,24 @@ Docker 공식 config 스키마는 `.auth = base64("<username>:<password>")` 형�
 | 이미지 | `registry:2.8.3` (Docker library 공식) |
 | 배포 | StatefulSet (replicas 1, volumeClaimTemplate) |
 | 서비스 | `docker-registry.mnt.svc.cluster.local:5000` |
-| 인증 | htpasswd (`/auth/htpasswd` volume mount) |
+| 인증 | **없음** (NetworkPolicy 로만 보호, 내부 전용) |
 | 저장 | PVC 10Gi (dev overlay에서 5Gi로 patch) |
-| 계정 | `push-user` (write) / `pull-user` (read-only) — 계정 분리 |
 
-Registry Pod 의 `/auth/htpasswd` 는 VSO 가 `VaultStaticSecret docker-registry-htpasswd` 로부터 합성한 K8s Secret 을 volume mount 한 것이다. Secret 이 생성되기 전까지 Pod 는 `ContainerCreating` 상태로 대기한다. 이는 정상 동작이다.
+### 왜 auth 를 제거했나
+
+Registry 는 `mnt` namespace 내부 전용이며 `overlays/dev/registry/networkpolicy.yaml` 이 같은 namespace Pod 만 ingress 를 허용한다. 외부 노출 없음. 단일 운영자 환경에서 push/pull 계정 분리는 과잉 설계라 판단하여 htpasswd / Vault KV (`secret/docker-registry/*`) / bcrypt 생성 Pod / imagePullSecrets 체인을 전부 제거. 이후 멀티테넌트 / 외부 노출 단계에서 auth 재도입 가능.
 
 ### Push / Pull
 
 ```bash
-docker login docker-registry.mnt.svc.cluster.local:5000
+# auth 없이 바로 push (내부 네트워크에서만 가능)
 docker tag my-app:v1 docker-registry.mnt.svc.cluster.local:5000/my-app:v1
 docker push docker-registry.mnt.svc.cluster.local:5000/my-app:v1
 ```
 
 ```yaml
 spec:
-  imagePullSecrets:
-    - name: registry-pull-credential
+  # imagePullSecrets 불필요
   containers:
     - name: my-app
       image: docker-registry.mnt.svc.cluster.local:5000/my-app:v1
@@ -400,12 +396,11 @@ k8s/overlays/dev/vso         build=ok  schema=ok  lint=ok
 현재 `dev` overlay 만 완성되어 있다. `staging` / `prod` 는 의도적으로 비어 있으며 추후 확장 예정. validate.sh 는 `kustomization.yaml` 이 없는 환경을 자동으로 스킵한다.
 
 ```bash
-# dev
-VAULT_PUSH_PASSWORD=... VAULT_PULL_PASSWORD=... \
-  bash k8s/scripts/bin/bootstrap.sh dev
+# dev — 비밀번호를 프롬프트에서 무음 입력 (bash history 에 안 남음)
+bash k8s/scripts/bin/bootstrap.sh dev
 
-# teardown
-CONFIRM=yes bash k8s/scripts/bin/teardown.sh dev
+# teardown — 대화형 y/N
+bash k8s/scripts/bin/teardown.sh dev
 ```
 
 ### 계획된 환경별 차등 (향후)

@@ -3,5 +3,5 @@ kind: VaultConnection
 metadata:
   name: vault-connection
 spec:
-  address: http://vault:8200
+  address: http://vault.mnt.svc.cluster.local:8200
   skipTLSVerify: false

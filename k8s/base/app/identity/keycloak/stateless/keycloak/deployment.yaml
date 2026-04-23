@@ -68,12 +68,21 @@ spec:
             - configMapRef:
                 name: keycloak-config
           env:
-            - name: KC_DB_PASSWORD_FILE
-              value: /etc/keycloak/db/password
-            - name: KC_BOOTSTRAP_ADMIN_USERNAME_FILE
-              value: /etc/keycloak/admin/KEYCLOAK_ADMIN
-            - name: KC_BOOTSTRAP_ADMIN_PASSWORD_FILE
-              value: /etc/keycloak/admin/KEYCLOAK_ADMIN_PASSWORD
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db
+                  key: password
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-bootstrap-admin
+                  key: KEYCLOAK_ADMIN
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-bootstrap-admin
+                  key: KEYCLOAK_ADMIN_PASSWORD
           resources:
             requests:
               cpu: 500m
@@ -111,7 +120,7 @@ spec:
             runAsGroup: 1000
             allowPrivilegeEscalation: false
             privileged: false
-            readOnlyRootFilesystem: true
+            readOnlyRootFilesystem: false
             capabilities:
               drop:
                 - ALL

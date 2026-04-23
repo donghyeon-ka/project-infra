@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Validate all kustomize overlays against schema + lint rules.
+# Validate all kustomize overlays against schema + lint rules,
+# 그리고 scripts/ 전체에 대해 shell 품질 게이트 (shellcheck + shfmt) 를 실행한다.
 #
 # Runs, for each environment (dev, staging, prod):
 #   1. `kustomize build overlays/<env>`           — structural validity
@@ -11,12 +12,16 @@
 #   4. `kube-linter lint`                         — anti-pattern lint against
 #      root .kube-linter.yaml configuration.
 #
+# Plus (not per-overlay):
+#   5. `shellcheck -S style` over k8s/scripts/**/*.sh  — shell correctness + style
+#   6. `shfmt -i 2 -bn -ci -d` over k8s/scripts/       — formatting diff (fail on drift)
+#
 # Exit codes:
 #   0 — everything passed
 #   1 — at least one step failed (details printed)
 #
 # Tools expected on $PATH:
-#   kustomize kubeconform kube-linter yq
+#   kustomize kubeconform kube-linter shellcheck shfmt
 
 set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,7 +38,7 @@ if [[ -d "$HOME/bin" ]]; then
   export PATH="$HOME/bin:$PATH"
 fi
 
-require_cmd kustomize kubeconform kube-linter yq
+require_cmd kustomize kubeconform kube-linter shellcheck shfmt
 
 ENVS=(dev staging prod)
 OVERLAYS_TO_BUILD=()
@@ -54,7 +59,7 @@ done
 CRD_CATALOG='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
 
 WORK_DIR="$(mktemp -d -t project-infra-validate.XXXXXX)"
-trap_cleanup "rm -rf '$WORK_DIR'"
+trap_cleanup_path "$WORK_DIR"
 
 declare -A BUILD_STATUS SCHEMA_STATUS LINT_STATUS
 
@@ -100,6 +105,41 @@ for overlay in "${OVERLAYS_TO_BUILD[@]}"; do
 done
 
 # -----------------------------------------------------------------------------
+# 5. shellcheck — scripts/**/*.sh 전체
+# -----------------------------------------------------------------------------
+SHELL_STATUS="skip"
+SCRIPTS_ROOT="$K8S_ROOT/scripts"
+mapfile -t SHELL_FILES < <(find "$SCRIPTS_ROOT" -type f -name '*.sh' -print | sort)
+
+if (( ${#SHELL_FILES[@]} > 0 )); then
+  log "shellcheck — ${#SHELL_FILES[@]} files"
+  if shellcheck -S style -x "${SHELL_FILES[@]}" >"$WORK_DIR/shellcheck.out" 2>&1; then
+    SHELL_STATUS="ok"
+    log "  shellcheck — OK"
+  else
+    SHELL_STATUS="fail"
+    err "  shellcheck — findings:"
+    sed 's/^/    /' "$WORK_DIR/shellcheck.out" >&2
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# 6. shfmt — 포매팅 drift 검증 (수정 없이 diff 만 출력)
+# -----------------------------------------------------------------------------
+FMT_STATUS="skip"
+if (( ${#SHELL_FILES[@]} > 0 )); then
+  log "shfmt -i 2 -bn -ci -d"
+  if shfmt -i 2 -bn -ci -d "${SHELL_FILES[@]}" >"$WORK_DIR/shfmt.out" 2>&1; then
+    FMT_STATUS="ok"
+    log "  shfmt — OK"
+  else
+    FMT_STATUS="fail"
+    err "  shfmt — drift 감지 (로컬에서 'shfmt -i 2 -bn -ci -w k8s/scripts' 로 정렬하세요):"
+    sed 's/^/    /' "$WORK_DIR/shfmt.out" >&2
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 echo >&2
@@ -116,10 +156,12 @@ for overlay in "${OVERLAYS_TO_BUILD[@]}"; do
   printf '  %-40s  build=%-4s  schema=%-4s  lint=%s\n' "$rel" "$b" "$s" "$l" >&2
   [[ "$b" == "fail" || "$s" == "fail" || "$l" == "fail" ]] && failed=$((failed + 1))
 done
+printf '  %-40s  shellcheck=%-4s  shfmt=%s\n' "scripts/" "$SHELL_STATUS" "$FMT_STATUS" >&2
+[[ "$SHELL_STATUS" == "fail" || "$FMT_STATUS" == "fail" ]] && failed=$((failed + 1))
 
 if (( failed > 0 )); then
-  err "$failed overlay(s) 실패"
+  err "$failed check(s) 실패"
   exit 1
 fi
 
-log "모든 overlay 통과"
+log "모든 check 통과"

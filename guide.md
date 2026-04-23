@@ -18,6 +18,14 @@
 10. [검증 / 린트 / 스키마 체크](#10-검증--린트--스키마-체크)
 11. [정리 / 롤백 (teardown)](#11-정리--롤백-teardown)
 12. [트러블슈팅](#12-트러블슈팅)
+13. [etcd encryption at rest](#13-etcd-encryption-at-rest)
+14. [Vault 운영자 토큰 관리](#14-vault-운영자-토큰-관리)
+15. [bash history 에 비밀번호 남기지 않기](#15-bash-history-에-비밀번호-남기지-않기)
+16. [트러블슈팅 — PodSecurity 위반 경고](#16-트러블슈팅--podsecurity-위반-경고)
+17. [트러블슈팅 — 기존 K8s Secret 이 남아있을 때](#17-트러블슈팅--기존-k8s-secret-이-남아있을-때)
+18. [트러블슈팅 — namespace 가 Terminating 에 걸림](#18-트러블슈팅--namespace-가-terminating-에-걸림)
+19. [트러블슈팅 — vault-0 이 Ready 안 됨](#19-트러블슈팅--vault-0-이-01-running-에서-멈춤)
+20. [트러블슈팅 — `helm upgrade` 가 `has no deployed releases` 로 실패](#20-트러블슈팅--helm-upgrade-가-has-no-deployed-releases-로-실패)
 
 ---
 
@@ -37,15 +45,15 @@
 
 validate.sh 는 `~/bin` 에 설치된 도구도 자동으로 PATH 에 추가한다.
 
-### 필요한 환경 변수 (자동 부트스트랩 시)
+### 필요한 환경 변수
 
 | 변수 | 의미 |
 |---|---|
-| `VAULT_PUSH_PASSWORD` | Docker Registry `push-user` 계정 비밀번호 |
-| `VAULT_PULL_PASSWORD` | Docker Registry `pull-user` 계정 비밀번호 |
 | `CONFIRM=yes` | (teardown 전용) 대화형 확인 자동 yes 처리 |
+| `RESET_STALE_SECRETS=yes` | (bootstrap 전용) 기존 VSO-managed Secret 삭제 후 재생성 |
+| `AUTO_GENERATE=yes` | (vault-seed-apps 전용) 비대화 + env 없음 시 랜덤 비밀번호 생성 |
 
-비대화 모드에서 `VAULT_PUSH_PASSWORD` / `VAULT_PULL_PASSWORD` 가 없으면 부트스트랩이 중단된다. 대화형 TTY 에서는 직접 입력 프롬프트가 뜬다.
+Registry auth 가 제거되어 `VAULT_PUSH_PASSWORD` / `VAULT_PULL_PASSWORD` 는 더 이상 사용하지 않는다. 앱 시크릿 5 개는 Phase 6 에서 대화형으로 입력받거나 env var 로 주입 (guide §4).
 
 ### 클러스터 전제
 
@@ -57,22 +65,45 @@ validate.sh 는 `~/bin` 에 설치된 도구도 자동으로 PATH 에 추가한�
 
 ## 2. 최초 부트스트랩 — 자동
 
+대화형 실행 (권장 — Phase 6 에서 앱 시크릿 5 개 비밀번호를 무음 입력. bash history 에 남지 않음):
+
 ```bash
-VAULT_PUSH_PASSWORD='<push용 비밀번호>' \
-VAULT_PULL_PASSWORD='<pull용 비밀번호>' \
 bash k8s/scripts/bin/bootstrap.sh dev
+# Phase 6 진행 중:
+#   Postgres superuser 비밀번호: *******
+#   Postgres superuser 비밀번호 한 번 더: *******
+#   Keycloak DB 비밀번호: *******
+#   ... (5 개 시크릿, 각각 확인 재입력 포함)
 ```
 
-`bin/bootstrap.sh` 가 6 단계를 순서대로 실행한다:
+비대화 (CI) 실행이 필요하면 env var 로 주되 **반드시 `HISTFILE=/dev/null` 접두어** 로 history 저장을 차단한다:
+
+```bash
+HISTFILE=/dev/null \
+POSTGRES_SUPERUSER_PASSWORD='...' \
+KEYCLOAK_DB_PASSWORD='...' \
+AUTH_SERVER_DB_PASSWORD='...' \
+KEYCLOAK_ADMIN_PASSWORD='...' \
+MINIO_ROOT_PASSWORD='...' \
+bash k8s/scripts/bin/bootstrap.sh dev
+
+# 또는 비대화 + 랜덤 생성 (운영자가 값을 몰라도 됨, Vault 에서 나중에 조회):
+AUTO_GENERATE=yes bash k8s/scripts/bin/bootstrap.sh dev
+```
+
+`bin/bootstrap.sh` 가 8 단계를 순서대로 실행한다:
 
 | 단계 | 내용 |
 |---|---|
-| [1/6] 인프라 리소스 배포 | `kubectl apply -k k8s/overlays/dev/` (namespace + vault + registry + 앱 워크로드) |
-| [2/6] vault-0 Ready 대기 | `kubectl wait ...` 최대 3 × 120s 재시도 |
-| [3/6] Vault 초기화 | `tasks/vault-init.sh` — init / unseal / k8s auth / KV v2 / policy / role |
-| [4/6] Registry 시크릿 seed | `tasks/vault-seed-registry.sh` — htpasswd 생성 → Vault KV 저장 |
-| [5/6] VSO Helm | `tasks/vso-install.sh` — `helm upgrade --install --wait --atomic` |
-| [6/6] VSO CRDs | `kubectl apply -k k8s/overlays/dev/vso/` |
+| [0/8] MinIO Operator 설치 | `tasks/minio-operator-install.sh` — Tenant CRD 선행 등록 (별도 namespace `minio-operator`) |
+| [1/8] Namespace + PSS 라벨 | `kubectl apply -k k8s/base/managing/namespace` — 먼저 적용해 의존성 안정화 |
+| [2/8] 기존 Secret 점검 | VSO-managed K8s Secret 5 개 중 이미 존재하는 것 탐지. `RESET_STALE_SECRETS=yes` 면 삭제 |
+| [3/8] 인프라 리소스 배포 | `kubectl apply -k k8s/overlays/dev/` (vault + registry + 앱 워크로드) |
+| [4/8] vault-0 Running 대기 | Ready 가 아니라 **Running** — Vault readiness probe 는 초기화+unseal 후에만 통과하므로 |
+| [5/8] Vault 초기화 | `tasks/vault-init.sh` — init / unseal / KV v2 / k8s auth / policy × 2 / role × 2 |
+| [6/8] 앱 시크릿 seed | `tasks/vault-seed-apps.sh` — 5 개 시크릿 대화형 입력 (이미 있으면 skip) |
+| [7/8] VSO Helm | `tasks/vso-install.sh` — 기존 dirty 릴리즈 자동 uninstall + `helm upgrade --install --wait` |
+| [8/8] VSO CRDs | `kubectl apply -k k8s/overlays/dev/vso/` |
 
 스크립트는 idempotent 다. 이미 진행된 단계는 자동 스킵된다.
 
@@ -84,7 +115,7 @@ bash k8s/scripts/bin/bootstrap.sh dev
 
 ```bash
 kubectl -n mnt get pods
-kubectl -n mnt get secrets | grep -E 'docker-registry-htpasswd|registry-pull-credential|keycloak-db|auth-server-db|minio-tenant-env'
+kubectl -n mnt get secrets | grep -E 'identity-postgres-superuser|keycloak-db|auth-server-db|keycloak-bootstrap-admin|minio-tenant-env'
 kubectl -n mnt get vaultstaticsecret
 ```
 
@@ -94,21 +125,30 @@ kubectl -n mnt get vaultstaticsecret
 
 자동 스크립트가 중간에 실패했을 때, 또는 학습 목적으로 단계별 진행이 필요할 때.
 
-### 3-1. 인프라 배포
+### 3-1. MinIO Operator 설치
 
 ```bash
+REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/minio-operator-install.sh
+```
+
+### 3-2. 인프라 배포
+
+```bash
+kubectl apply -k k8s/base/managing/namespace   # namespace 선행
 kubectl apply -k k8s/overlays/dev/
 ```
 
-`mnt` namespace 와 Vault / Registry / 앱 워크로드가 선언된다. **Registry Pod 는 `docker-registry-htpasswd` Secret 이 생기기 전까지 `ContainerCreating` 상태로 대기하는 것이 정상**이다. Secret 은 VSO 가 생성하므로 5~6 단계 이후에 생성된다.
+`mnt` namespace 와 Vault / Registry / 앱 워크로드가 선언된다. Registry 는 auth 가 없어서 바로 Running. Postgres / Keycloak / auth-server 는 Vault secret 이 주입되기 전까지 `ContainerCreating` 으로 대기 (정상).
 
-### 3-2. Vault Pod Ready 대기
+### 3-3. Vault Pod Running 대기
+
+Vault 는 초기화 전에는 Ready 가 될 수 없으므로 Running 까지만 기다린다 (§19 참고).
 
 ```bash
-kubectl -n mnt wait --for=condition=Ready pod/vault-0 --timeout=120s
+kubectl -n mnt wait --for=jsonpath='{.status.phase}'=Running pod/vault-0 --timeout=120s
 ```
 
-### 3-3. Vault 초기화
+### 3-4. Vault 초기화
 
 ```bash
 REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vault-init.sh
@@ -121,21 +161,8 @@ REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vault-init.sh
 - root token 으로 로그인 (stdin 파이프 — stdout 에 안 찍힘)
 - `secret/` 에 KV v2 활성화 (idempotent)
 - `kubernetes` auth method 활성화 + `kubernetes_ca_cert` + `token_reviewer_jwt` 설정 (idempotent)
-- `vault-secrets-operator` policy 생성 (항상 재적용)
-- `vault-secrets-operator` role 생성 (항상 재적용)
-
-### 3-4. Registry 시크릿 seed
-
-```bash
-REPO_ROOT="$(pwd)" \
-VAULT_PUSH_PASSWORD='<push>' \
-VAULT_PULL_PASSWORD='<pull>' \
-bash k8s/scripts/tasks/vault-seed-registry.sh
-```
-
-- htpasswd 는 `httpd:2.4-alpine` 임시 Pod 에서 생성 (로컬 Docker 데몬 불필요)
-- Vault KV 에 `secret/docker-registry/auth` (htpasswd 전체 파일) + `secret/docker-registry/pull-credentials` (username/password) 저장
-- 비밀번호는 argv / stdout 에 절대 노출되지 않음
+- `vso-auth-platform` / `vso-storage` policy × 2 작성 (항상 재적용)
+- `vso-auth-platform` / `vso-storage` k8s auth role × 2 작성 (항상 재적용)
 
 ### 3-5. VSO Helm 설치
 
@@ -143,7 +170,7 @@ bash k8s/scripts/tasks/vault-seed-registry.sh
 REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vso-install.sh
 ```
 
-`helm upgrade --install --wait --atomic --timeout 5m` 으로 실행. 실패 시 자동 롤백. `--values` 는 `k8s/base/plugins/vso/helm/values.yaml` 사용.
+`helm upgrade --install --wait --timeout 5m` 으로 실행. 시작 시 기존 릴리즈가 `failed`/`pending*`/`uninstalling` 상태면 자동 uninstall 후 재설치 (guide §20 참고). `--values` 는 `k8s/base/plugins/vso/helm/values.yaml`.
 
 ### 3-6. VSO CRDs 적용
 
@@ -151,45 +178,64 @@ REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vso-install.sh
 kubectl apply -k k8s/overlays/dev/vso/
 ```
 
-`VaultConnection` / `VaultAuth` / `VaultStaticSecret` 이 적용되면 VSO Operator 가 Vault KV 를 읽어 K8s Secret 을 생성한다. `docker-registry-htpasswd` 가 만들어지면 Registry Pod 가 `ContainerCreating` → `Running` 으로 전환된다.
+`VaultConnection` / `VaultAuth` × 2 가 등록된다. `VaultStaticSecret` 은 dev overlay 각 서브디렉토리 (`database/`, `keycloak/`, `storage/`) 에서 이미 함께 적용됨. VSO Operator 가 Vault KV 를 읽어 K8s Secret 을 합성 — 단, **해당 Vault KV 경로에 값이 실제로 있어야 성공**. 아직 없으면 VSO 가 permission denied 또는 not found 로 남음. guide §4 의 수동 주입 후 자동 재시도.
 
 ---
 
 ## 4. Vault 시크릿 관리
 
-### 애플리케이션 시크릿 저장
+### 애플리케이션 시크릿 저장 — 자동화됨 (`tasks/vault-seed-apps.sh`)
 
-현재 dev overlay 의 VaultStaticSecret 들은 아래 Vault 경로에 실제 값이 저장되어 있다고 전제한다. 부트스트랩 직후에는 비어 있으므로 관리자가 한 번 채워야 한다.
+5 개 시크릿은 `bin/bootstrap.sh` Phase 6 에서 자동으로 seed 된다. 또는 단독 실행 가능:
 
 ```bash
-# port-forward 로 vault CLI 사용 (개발 편의)
+REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vault-seed-apps.sh
+```
+
+동작:
+- **이미 있는 경로는 skip** — 운영자가 회전한 값을 덮어쓰지 않음
+- **대화형 입력** (TTY) — `read -r -s` 로 무음 입력 + 확인 재입력. bash history 에 남지 않음
+- **비대화 + env 지정** — 해당 env var 를 사용 (`HISTFILE=/dev/null` 접두 권장)
+- **비대화 + env 없음 + `AUTO_GENERATE=yes`** — `openssl rand` 로 랜덤 24자 생성
+
+Vault CLI 의 `vault kv put <path> -` 모드로 **JSON stdin 전달** 이라 비밀번호가 argv / process table 어디에도 노출되지 않는다.
+
+### 시크릿 경로 및 키
+
+| 경로 | 키 | 용도 |
+|---|---|---|
+| `secret/identity-postgres/superuser` | `username` (기본 postgres), `password` | Postgres 슈퍼유저 (`POSTGRES_USER_FILE` / `POSTGRES_PASSWORD_FILE`) |
+| `secret/keycloak/db` | `password` | Keycloak 의 DB 비밀번호 + initdb 가 생성하는 keycloak DB role |
+| `secret/auth-server/db` | `SPRING_DATASOURCE_USERNAME` (기본 auth_server), `SPRING_DATASOURCE_PASSWORD` | Spring Boot configtree + Flyway |
+| `secret/keycloak/bootstrap-admin` | `KEYCLOAK_ADMIN` (기본 admin), `KEYCLOAK_ADMIN_PASSWORD` | Keycloak 초기 관리자 계정 |
+| `secret/minio/tenant-env` | `config.env` (env-file 포맷 단일 키) | MinIO Operator Tenant 루트 자격증명 |
+
+### 값 조회
+
+```bash
 kubectl -n mnt port-forward svc/vault 8200:8200 &
 export VAULT_ADDR=http://127.0.0.1:8200
-export VAULT_TOKEN="$(jq -r .root_token vault-init-keys.json)"
+vault login -method=userpass username=alice   # userpass admin 으로 로그인 권장
 
-# Postgres superuser
-vault kv put secret/identity-postgres/superuser \
-  username=postgres \
-  password='<강한-비밀번호>'
-
-# Keycloak DB
-vault kv put secret/keycloak/db password='<pw>'
-
-# Auth-server DB
-vault kv put secret/auth-server/db \
-  SPRING_DATASOURCE_USERNAME=auth_server \
-  SPRING_DATASOURCE_PASSWORD='<pw>'
-
-# Keycloak bootstrap admin
-vault kv put secret/keycloak/bootstrap-admin \
-  KEYCLOAK_ADMIN=admin \
-  KEYCLOAK_ADMIN_PASSWORD='<pw>'
-
-# MinIO root creds
-vault kv put secret/minio/tenant-env \
-  config.env='export MINIO_ROOT_USER="admin"
-export MINIO_ROOT_PASSWORD="<pw>"'
+vault kv get secret/keycloak/bootstrap-admin
+# 특정 field 만:
+vault kv get -field=KEYCLOAK_ADMIN_PASSWORD secret/keycloak/bootstrap-admin
 ```
+
+### 값 변경 (비밀번호 교체)
+
+```bash
+# 새 값으로 덮어쓰기 (vault kv put) — seed-apps.sh 의 skip 로직 우회
+vault kv put secret/keycloak/db password='<새-pw>'
+
+# 60s ~ 1h 내 VSO 가 자동으로 K8s Secret 갱신. 즉시 반영 원하면:
+kubectl -n mnt delete secret keycloak-db
+# VSO 가 Vault KV 를 읽어 재생성
+```
+
+### 주의 — 비밀번호에 `"` 금지
+
+MinIO 의 `config.env` 는 env-file 포맷 (`export KEY="value"`) 이라 값에 `"` 가 들어가면 파싱 깨짐. `vault-seed-apps.sh` 가 프롬프트에서 거부하며 재입력 요구한다.
 
 VSO 가 `refreshAfter: 60s` / `1h` (경로별) 주기로 K8s Secret 에 반영한다. 즉시 반영하려면 해당 VaultStaticSecret 을 삭제·재생성하거나 `kubectl -n mnt annotate vaultstaticsecret <name> refresh=$(date +%s) --overwrite`.
 
@@ -228,7 +274,7 @@ docker tag my-app:0.1.0 docker-registry.mnt.svc.cluster.local:5000/my-app:0.1.0
 docker push docker-registry.mnt.svc.cluster.local:5000/my-app:0.1.0
 ```
 
-클러스터 외부에서 push 하려면 별도 Ingress + TLS + NodePort 구성이 필요하다 (현재 Registry 는 ClusterIP 만).
+Registry 는 auth 가 없으므로 `docker login` 불필요. 외부 노출 없으므로 push 는 오직 클러스터 내부에서만 (또는 `kubectl port-forward` 로 로컬 터널). 외부에서 push 하려면 별도 Ingress + TLS + auth proxy 구성 필요 (현재 범위 밖).
 
 ### Pull (Pod)
 
@@ -338,8 +384,7 @@ root token 은 최초 설정 / 비상 복구 외에는 사용하지 않는다. �
 현재 `dev` 만 구성되어 있다.
 
 ```bash
-VAULT_PUSH_PASSWORD=... VAULT_PULL_PASSWORD=... \
-  bash k8s/scripts/bin/bootstrap.sh dev
+bash k8s/scripts/bin/bootstrap.sh dev
 ```
 
 staging / prod overlay 는 비어 있으며, 추후 다음 요소를 추가한다:
@@ -383,19 +428,38 @@ bash k8s/scripts/bin/teardown.sh dev
 
 # 비대화 (CI)
 CONFIRM=yes bash k8s/scripts/bin/teardown.sh dev
+
+# MinIO Operator 까지 제거 (기본은 유지)
+TEARDOWN_MINIO_OPERATOR=yes bash k8s/scripts/bin/teardown.sh dev
 ```
 
-5 단계:
+체계적 7 단계:
 
 | 단계 | 내용 |
 |---|---|
-| [1/5] | VSO CRDs 삭제 (`kubectl delete -k overlays/dev/vso/`) |
-| [2/5] | VSO Helm uninstall |
-| [3/5] | 인프라 리소스 삭제 (`kubectl delete -k overlays/dev/`) |
-| [4/5] | 남은 PVC 모두 삭제 (`mnt` namespace) |
-| [5/5] | `vault-tokenreview-binding` ClusterRoleBinding 삭제 |
+| [1/7] Precheck | namespace 존재 여부 + phase 확인. 일부 단계는 없으면 skip |
+| [2/7] VSO CRD 삭제 | `kubectl delete -k overlays/<env>/vso/` 60s timeout. 타임아웃 시 `VaultStaticSecret / VaultAuth / VaultConnection` finalizer 강제 해제 |
+| [3/7] VSO Helm uninstall | `helm uninstall --wait 5m` (Operator 제거) |
+| [4/7] 인프라 overlay 삭제 | `kubectl delete -k overlays/<env>/` 120s timeout |
+| [5/7] namespace 잔존 리소스 finalizer 정리 | PVC 보호 finalizer + VSO CRD + 전체 namespaced 리소스 일괄 finalizer 제거 |
+| [6/7] namespace 삭제 + Terminating 감지 | `kubectl delete namespace` 60s 대기 → 실패 시 `/finalize` API 호출로 강제 종료 |
+| [7/7] Cluster-scoped 정리 | `vault-tokenreview-binding` ClusterRoleBinding 제거. `TEARDOWN_MINIO_OPERATOR=yes` 면 MinIO Operator 도 함께 |
+
+**핵심 개선**: controller 없이 남은 CRD finalizer, PVC 보호 finalizer, 전체 namespaced 리소스 finalizer 를 단계별로 선제 해제해서 namespace 가 Terminating 에 걸리지 않도록 처리. 이미 Terminating 에 걸려 있어도 Phase 6 에서 `/finalize` API 직접 호출로 강제 종료.
 
 teardown 후에도 `vault-init-keys.json` 은 보존된다. 완전 초기화하려면 수동으로 삭제한다.
+
+### 강제 종료의 부작용 경고
+
+Phase 6 의 `/finalize` 는 orphan 리소스 (PV / PVC 바인딩) 를 남길 수 있다. 일반적으로:
+
+```bash
+# teardown 후 orphan PV 검사
+kubectl get pv | grep -E 'Released|Failed'
+
+# 필요시 수동 삭제
+kubectl delete pv <name>
+```
 
 ---
 
@@ -433,11 +497,10 @@ kubectl -n mnt logs -l app.kubernetes.io/name=vault-secrets-operator --tail=200 
 ### 부트스트랩 중단 → 재시작
 
 ```bash
-VAULT_PUSH_PASSWORD=... VAULT_PULL_PASSWORD=... \
-  bash k8s/scripts/bin/bootstrap.sh dev
+bash k8s/scripts/bin/bootstrap.sh dev
 ```
 
-각 단계가 idempotent 이므로 그대로 다시 실행해도 된다. 이미 완료된 단계는 스킵된다.
+각 단계가 idempotent 이므로 그대로 다시 실행해도 된다. 이미 완료된 단계는 스킵된다. 프롬프트에서 push-user / pull-user 비밀번호를 다시 입력해야 하지만, **Vault KV 에 이미 있으면 Phase 6 이 스킵되므로 비밀번호는 사용되지 않음**.
 
 ### Vault UI 가 안 열림
 
@@ -676,3 +739,194 @@ vault audit enable socket address=loki-syslog.monitoring.svc:514 socket_type=tcp
 ```
 
 `statefulset.yaml` 의 volumeMounts 에 `/vault/logs` 를 추가해야 파일 방식 사용 가능. 별도 작업.
+
+---
+
+## 15. bash history 에 비밀번호 남기지 않기
+
+`VAR=value command` 형태로 env var 를 명령줄에 직접 적으면 **그대로 `~/.bash_history` 에 저장**된다. 대응:
+
+### 선호 — 대화형 입력
+
+```bash
+bash k8s/scripts/bin/bootstrap.sh dev
+# 프롬프트에서 무음 입력 (echo 안 됨)
+```
+
+본 프로젝트의 모든 스크립트 (`bootstrap.sh`, `tasks/vault-seed-registry.sh`, `tasks/vault-setup-admin.sh`) 는 env var 가 비어 있으면 TTY 에서 자동으로 `read -r -s` 프롬프트로 전환한다.
+
+### 비대화 (CI) 실행 시
+
+어쩔 수 없이 env var 를 넣어야 할 때:
+
+```bash
+# 이번 명령만 history 에 안 남기기
+HISTFILE=/dev/null \
+VAULT_PUSH_PASSWORD='...' VAULT_PULL_PASSWORD='...' \
+bash k8s/scripts/bin/bootstrap.sh dev
+
+# 또는 세션 전체 history 비활성화
+set +o history
+VAULT_PUSH_PASSWORD='...' bash ...
+set -o history
+```
+
+`HISTCONTROL=ignorespace` 가 설정된 쉘이면 **명령 앞에 공백 1 칸** 넣어도 저장되지 않는다. 다만 쉘마다 설정이 다르니 `HISTFILE=/dev/null` 이 가장 확실.
+
+---
+
+## 16. 트러블슈팅 — PodSecurity 위반 경고
+
+`kubectl apply` 중 `Warning: would violate PodSecurity "restricted:latest": ...` 메시지가 뜨면 **어떤 Pod 의 어떤 필드** 가 위반인지 확인:
+
+```bash
+# 최근 이벤트
+kubectl -n mnt get events --sort-by='.lastTimestamp' \
+  | grep -i 'podsecurity\|FailedCreate'
+
+# 경고 메시지는 apply 시 stderr 로도 나옴
+kubectl apply -k k8s/overlays/dev/ 2>&1 | grep -i warning
+```
+
+자주 걸리는 항목 체크리스트:
+
+- `runAsNonRoot: true` 누락 또는 `runAsUser: 0`
+- `allowPrivilegeEscalation: false` 누락
+- `capabilities.drop: [ALL]` 누락
+- `seccompProfile.type: RuntimeDefault` 누락
+- `readOnlyRootFilesystem: true` 누락 (선택이지만 권장)
+- hostPath / hostNetwork / hostPID / hostIPC 사용
+- hostPorts 사용
+
+**base 의 모든 워크로드는 이미 Restricted 통과**. 경고가 뜨는 건 보통 다음 두 가지:
+
+1. **VSO Operator Helm chart** — chart 0.9.0 기본 설정이 `readOnlyRootFilesystem` 을 세팅하지 않을 수 있음. `k8s/base/plugins/vso/helm/values.yaml` 에 securityContext override 추가 가능
+2. **MinIO Operator Helm chart** — 자체 chart 의 Operator Pod
+
+양쪽 모두 Operator 의 Pod 이고, 자기 namespace(`vault-secrets-operator-system` / `minio-operator`)에서 돌아가므로 `mnt` 의 PSS 와 무관. `mnt` 안의 Pod 에서 경고가 나면 매니페스트를 수정해야 함.
+
+### 자주 걸리는 특수 케이스 — `htpasswd-gen-*` 임시 Pod
+
+`vault-seed-registry.sh` 가 bcrypt htpasswd 생성을 위해 `mnt` 에 임시 `httpd:2.4-alpine` Pod 를 띄운다. 이 Pod 는 `kubectl run` 기본값이 아닌 **완전한 Restricted spec** (runAsNonRoot, drop ALL, allowPrivilegeEscalation=false, seccompProfile RuntimeDefault) 이 필요하며 현재 스크립트는 `kubectl apply -f -` heredoc 으로 해당 필드를 명시적으로 지정한다. 만약 이 Pod 생성에서 PSS 위반 에러가 뜬다면 `tasks/vault-seed-registry.sh` 의 Pod manifest 가 최신 버전인지 확인.
+
+---
+
+## 17. 트러블슈팅 — 기존 K8s Secret 이 남아있을 때
+
+VSO 는 `destination.overwrite: false` 기본값이라 **이미 존재하는 Secret 을 덮어쓰지 않는다**. Vault KV 에 새 값을 넣어도 K8s Secret 은 옛날 값을 유지.
+
+### 확인
+
+```bash
+kubectl -n mnt get secret -l 'kubernetes.io/managed-by!=Helm' \
+  -o custom-columns=NAME:.metadata.name,AGE:.metadata.creationTimestamp
+```
+
+### 해결 1 — 개별 삭제 후 VSO 재생성
+
+```bash
+kubectl -n mnt delete secret docker-registry-htpasswd registry-pull-credential
+# VSO 가 1-2 분 내 Vault KV 에서 읽어 재생성
+kubectl -n mnt get vaultstaticsecret
+```
+
+### 해결 2 — bootstrap 재실행 시 자동 정리
+
+```bash
+RESET_STALE_SECRETS=yes bash k8s/scripts/bin/bootstrap.sh dev
+# Phase 2 에서 VSO-managed Secret 7 개 전부 삭제 → Phase 7/8 에서 VSO 재생성
+```
+
+이 옵션은 **destructive**. 운영자가 명시적으로 지정했을 때만 동작.
+
+---
+
+## 19. 트러블슈팅 — vault-0 이 `0/1 Running` 에서 멈춤
+
+### 현상
+
+```
+NAME      READY   STATUS    RESTARTS   AGE
+vault-0   0/1     Running   0          2m
+```
+
+계속 `0/1 Running`. `kubectl wait --for=condition=Ready` 가 timeout 으로 실패.
+
+### 원인 — 의도된 동작
+
+Vault 의 readiness probe 는 `/v1/sys/health?sealedcode=503&uninitcode=503` 를 사용한다. 즉:
+- **uninitialized** → HTTP 503 → readiness fail
+- **sealed** → HTTP 503 → readiness fail
+- **initialized + unsealed** → HTTP 200 → Ready
+
+이건 sealed Vault 가 Service Endpoints 에서 제외되어 트래픽이 흘러가지 않도록 하는 **보안 설계**. 초기화 전에는 구조상 Ready 가 될 수 없다.
+
+### 해결 — `vault-init.sh` 실행
+
+```bash
+# Pod 이 Running 이면 exec 가능 → 초기화 실행 가능
+REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vault-init.sh
+```
+
+수행되는 것:
+1. `vault operator init` — unseal keys + root token 생성
+2. unseal 5 shares 중 3 개로 자동 unseal
+3. root login → KV v2 + k8s auth + policy × 3 + role × 3
+
+`vault-init.sh` 가 끝나고 몇 초 뒤 Pod 이 자동으로 Ready 로 전환:
+
+```bash
+kubectl -n mnt get pod vault-0
+# vault-0   1/1   Running
+```
+
+### bootstrap.sh 가 Phase 4 에서 Ready 대기로 실패했을 때 — 재개
+
+```bash
+# Phase 4 까지는 apply + Pod Running 완료 상태
+# 남은 Phase 5~8 만 수동 실행
+REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vault-init.sh             # Phase 5
+REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vault-seed-registry.sh    # Phase 6
+REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vso-install.sh            # Phase 7
+kubectl apply -k k8s/overlays/dev/vso/                              # Phase 8
+```
+
+또는 bootstrap.sh 를 그냥 다시 실행해도 된다 (idempotent). Phase 4 가 최신 버전에선 Running 만 기다리므로 바로 Phase 5 로 진행된다.
+
+### 참고 — 다른 Pod 들이 `ContainerCreating` 상태
+
+`auth-server`, `keycloak`, `identity-postgres`, `docker-registry`, `migration-flyway` 가 `ContainerCreating` 에 머무는 건 **VSO 가 만드는 K8s Secret 이 아직 없어서** volume mount 가 대기 중인 것. Vault 초기화 + 앱 secret 주입 (guide §4) + VSO sync 가 끝나면 차례로 Running 으로 전환된다. 정상 동작.
+
+### 참고 — `test-server-*` 가 `ImagePullBackOff`
+
+`registry.example.com/test-platform/test-server-*:0.1.0` 은 **예시 이미지** 로, 실제 레지스트리에 존재하지 않는다. 사용자가 실제 이미지를 빌드해서 내부 Registry 에 푸시해야 한다. 지금은 무시해도 된다.
+
+---
+
+## 20. 트러블슈팅 — `helm upgrade` 가 `has no deployed releases` 로 실패
+
+### 현상
+
+bootstrap Phase 7 (VSO Helm) 에서:
+
+```
+Error: UPGRADE FAILED: "vault-secrets-operator" has no deployed releases
+```
+
+### 원인
+
+이전 `helm upgrade --install` 시도가 `--atomic` 때문에 rollback 되며 릴리즈가 `failed` 또는 `uninstalled` 상태로 남음. Helm 이 metadata 는 보존하는데 실제 배포물은 없는 상태. 이 상태에선 `upgrade --install` 이 **upgrade 로 분기하려다 "deployed release 없음" 으로 실패**.
+
+### 해결
+
+`tasks/vso-install.sh` 는 이제 실행 시 릴리즈 상태를 먼저 검사해서 `failed`/`pending*`/`uninstalling`/`uninstalled` 면 **자동으로 `helm uninstall`** 을 먼저 수행한다. 또한 `--atomic` 플래그를 제거했다 (실패 시 재실행으로 복구가 더 안전).
+
+구버전 스크립트로 이미 이 상태에 빠졌다면 수동 정리:
+
+```bash
+helm -n mnt uninstall vault-secrets-operator
+# (Error: uninstall: Release not loaded: ... 이 떠도 무시)
+
+bash k8s/scripts/bin/bootstrap.sh dev
+# Phase 7 부터 깔끔하게 재개됨
+```

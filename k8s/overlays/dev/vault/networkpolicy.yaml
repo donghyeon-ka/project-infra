@@ -8,6 +8,38 @@ metadata:
     app.kubernetes.io/component: secret-management
     app.kubernetes.io/part-of: security-platform
     app.kubernetes.io/managed-by: kustomize
+# -----------------------------------------------------------------------------
+# Vault 정책 — 두 방향 통제
+#
+# (1) Ingress: VSO Controller Pod 에서만 8200 수신
+#     VSO 가 `vault-secrets-operator-system` ns 와 `mnt` ns 양쪽에서 접근할
+#     가능성 (과거 설치 잔존 + 신규 전용 ns) 이 있어 둘 다 허용.
+#
+# (2) Egress: kube-apiserver 의 TokenReview 호출만 허용
+#     Vault k8s auth 는 클라이언트가 보낸 SA JWT 를 검증하기 위해
+#     `authentication.k8s.io/v1/tokenreviews` 를 호출한다. kube-apiserver 는
+#     host network 프로세스이므로 Pod/Namespace 라벨로 selector 를 못 쓰고
+#     ipBlock 이 불가피 (stock NetworkPolicy 의 한계; Cilium 이면
+#     `toEntities: [kube-apiserver]` 로 해결됨).
+#
+#     두 CIDR 이 필요한 이유:
+#       - 443/TCP → `kubernetes.default.svc` (Service ClusterIP). Vault 가
+#         먼저 보내는 목적지. Service CIDR 에서 할당됨.
+#       - 6443/TCP → control-plane 노드의 실제 kube-apiserver 포트. k3s 의
+#         kube-proxy(iptables) 가 Service → node DNAT 를 수행하는데, 기본
+#         CNI (flannel + kube-router) 는 NetworkPolicy 를 veth iptables 단에서
+#         평가하면서 DNAT 전/후 시점이 엇갈려 두 쪽 모두 허용해야 안전.
+#
+#     CIDR 값의 출처:
+#       - 10.43.0.0/16 → k3s `service-cidr` 기본값. `/etc/rancher/k3s/config.yaml`
+#         의 값과 동기화. 커스텀 service-cidr 를 쓰면 이 값을 맞춰 변경.
+#       - 10.208.141.0/24 → **이 overlay 의 control-plane 노드 서브넷**.
+#         노드를 추가/교체하거나 staging/prod overlay 를 만들 때 실제 값으로
+#         반드시 재지정. dev 단일 노드 기준으로 /24 여유를 둠.
+#
+#     staging/prod overlay 는 이 파일을 그대로 복붙하지 말고 각자의 서브넷으로
+#     교체. 재사용 구조가 필요해지면 base + per-env patch 로 분리할 것.
+# -----------------------------------------------------------------------------
 spec:
   podSelector:
     matchLabels:
@@ -15,11 +47,30 @@ spec:
       app.kubernetes.io/instance: vault
   policyTypes:
     - Ingress
+    - Egress
   ingress:
     - from:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: vault-secrets-operator
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: vault-secrets-operator-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vault-secrets-operator
       ports:
         - protocol: TCP
           port: 8200
+  egress:
+    # Vault → kube-apiserver (TokenReview 용)
+    - to:
+        - ipBlock:
+            cidr: 10.43.0.0/16        # k3s service-cidr — kubernetes.default.svc 포함
+        - ipBlock:
+            cidr: 10.208.141.0/24     # dev control-plane 노드 서브넷 (env-specific)
+      ports:
+        - protocol: TCP
+          port: 443                   # Service ClusterIP 경유
+        - protocol: TCP
+          port: 6443                  # node DNAT 후 kube-apiserver 실포트

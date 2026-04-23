@@ -2,6 +2,13 @@ defaultVaultConnection:
   enabled: false
 
 controller:
+  # VSO 는 mnt namespace 에 설치되고 mnt 는 PSS restricted enforce 상태이므로
+  # chart 의 Operator Pod 도 Restricted 프로필을 만족해야 한다.
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+
   manager:
     resources:
       limits:
@@ -10,3 +17,21 @@ controller:
       requests:
         cpu: 10m
         memory: 64Mi
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+          - ALL
+      seccompProfile:
+        type: RuntimeDefault
+
+  kubeRbacProxy:
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+          - ALL
+      seccompProfile:
+        type: RuntimeDefault

@@ -18,8 +18,7 @@ data:
   KC_PROXY_HEADERS: xforwarded
   KC_HOSTNAME_STRICT: "true"
   KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "false"
-  KC_CACHE: ispn
-  KC_CACHE_STACK: jdbc-ping
+  KC_CACHE: local
   KC_HEALTH_ENABLED: "true"
   KC_METRICS_ENABLED: "true"
   KC_LOG_CONSOLE_OUTPUT: json

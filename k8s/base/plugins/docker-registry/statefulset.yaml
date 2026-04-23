@@ -85,18 +85,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/registry
-            - name: auth
-              mountPath: /auth
-              readOnly: true
             - name: tmp
               mountPath: /tmp
       volumes:
-        - name: auth
-          secret:
-            secretName: docker-registry-htpasswd
-            items:
-              - key: htpasswd
-                path: htpasswd
         - name: tmp
           emptyDir:
             medium: Memory
