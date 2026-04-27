@@ -1,6 +1,35 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: auth-server-ingress-traefik
+  labels:
+    app.kubernetes.io/name: auth-server
+    app.kubernetes.io/instance: auth-server
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: auth-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: auth-server
+      app.kubernetes.io/instance: auth-server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: auth-server-egress
   labels:
     app.kubernetes.io/name: auth-server
@@ -27,8 +56,8 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: keycloak
               app.kubernetes.io/instance: keycloak
+              app.kubernetes.io/managed-by: keycloak-operator
       ports:
         - protocol: TCP
           port: 8080

@@ -48,9 +48,9 @@ spec:
             - name: FLYWAY_LOCATIONS
               value: filesystem:/flyway/sql
             - name: FLYWAY_SCHEMAS
-              value: auth_server
+              value: auth
             - name: FLYWAY_DEFAULT_SCHEMA
-              value: auth_server
+              value: auth
             - name: FLYWAY_TABLE
               value: flyway_schema_history
             - name: FLYWAY_VALIDATE_ON_MIGRATE
@@ -90,20 +90,6 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
-        - name: flyway-validate
-          image: flyway/flyway:10.20.1
-          imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c"]
-          args: ["FLYWAY_USER=\"$(cat /run/secrets/db/SPRING_DATASOURCE_USERNAME)\" FLYWAY_PASSWORD=\"$(cat /run/secrets/db/SPRING_DATASOURCE_PASSWORD)\" exec /flyway/flyway validate"]
-          env: *flywayEnv
-          resources:
-            requests:
-              cpu: 50m
-              memory: 128Mi
-            limits:
-              memory: 256Mi
-          securityContext: *flywaySC
-          volumeMounts: *flywayVM
       containers:
         - name: flyway-migrate
           image: flyway/flyway:10.20.1

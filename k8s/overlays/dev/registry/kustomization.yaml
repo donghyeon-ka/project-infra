@@ -5,13 +5,7 @@ namespace: mnt
 
 resources:
   - ../../../base/plugins/docker-registry
+  - vault-secrets.yaml
+  - middleware.yaml
+  - ingress-public.yaml
   - networkpolicy.yaml
-
-patches:
-  - target:
-      kind: StatefulSet
-      name: docker-registry
-    patch: |-
-      - op: replace
-        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
-        value: 5Gi

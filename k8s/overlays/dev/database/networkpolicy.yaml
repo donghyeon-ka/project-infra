@@ -19,8 +19,8 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: keycloak
               app.kubernetes.io/instance: keycloak
+              app.kubernetes.io/managed-by: keycloak-operator
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: auth-server

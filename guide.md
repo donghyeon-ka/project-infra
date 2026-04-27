@@ -9,23 +9,26 @@
 1. [사전 준비](#1-사전-준비)
 2. [최초 부트스트랩 — 자동](#2-최초-부트스트랩--자동)
 3. [최초 부트스트랩 — 수동 (단계별)](#3-최초-부트스트랩--수동-단계별)
-4. [Vault 시크릿 관리](#4-vault-시크릿-관리)
-5. [Docker Registry 사용법](#5-docker-registry-사용법)
-6. [앱에서 시크릿 사용하기](#6-앱에서-시크릿-사용하기)
-7. [마이그레이션 실행 (Flyway)](#7-마이그레이션-실행-flyway)
-8. [Vault UI 접근](#8-vault-ui-접근)
-9. [환경별 배포](#9-환경별-배포)
-10. [검증 / 린트 / 스키마 체크](#10-검증--린트--스키마-체크)
-11. [정리 / 롤백 (teardown)](#11-정리--롤백-teardown)
-12. [트러블슈팅](#12-트러블슈팅)
-13. [etcd encryption at rest](#13-etcd-encryption-at-rest)
-14. [Vault 운영자 토큰 관리](#14-vault-운영자-토큰-관리)
-15. [bash history 에 비밀번호 남기지 않기](#15-bash-history-에-비밀번호-남기지-않기)
-16. [트러블슈팅 — PodSecurity 위반 경고](#16-트러블슈팅--podsecurity-위반-경고)
-17. [트러블슈팅 — 기존 K8s Secret 이 남아있을 때](#17-트러블슈팅--기존-k8s-secret-이-남아있을-때)
-18. [트러블슈팅 — namespace 가 Terminating 에 걸림](#18-트러블슈팅--namespace-가-terminating-에-걸림)
-19. [트러블슈팅 — vault-0 이 Ready 안 됨](#19-트러블슈팅--vault-0-이-01-running-에서-멈춤)
-20. [트러블슈팅 — `helm upgrade` 가 `has no deployed releases` 로 실패](#20-트러블슈팅--helm-upgrade-가-has-no-deployed-releases-로-실패)
+4. [Traefik / Ingress 운영](#4-traefik--ingress-운영)
+5. [TLS / cert-manager 적용](#5-tls--cert-manager-적용)
+6. [Keycloak Operator / RealmImport 적용](#6-keycloak-operator--realmimport-적용)
+7. [Vault 시크릿 관리](#7-vault-시크릿-관리)
+8. [Docker Registry 사용법](#8-docker-registry-사용법)
+9. [앱에서 시크릿 사용하기](#9-앱에서-시크릿-사용하기)
+10. [마이그레이션 실행 (Flyway)](#10-마이그레이션-실행-flyway)
+11. [Vault UI 접근](#11-vault-ui-접근)
+12. [환경별 배포](#12-환경별-배포)
+13. [검증 / 린트 / 스키마 체크](#13-검증--린트--스키마-체크)
+14. [정리 / 롤백 (teardown)](#14-정리--롤백-teardown)
+15. [트러블슈팅](#15-트러블슈팅)
+16. [etcd encryption at rest](#16-etcd-encryption-at-rest)
+17. [Vault 운영자 토큰 관리](#17-vault-운영자-토큰-관리)
+18. [bash history 에 비밀번호 남기지 않기](#18-bash-history-에-비밀번호-남기지-않기)
+19. [트러블슈팅 — PodSecurity 위반 경고](#19-트러블슈팅--podsecurity-위반-경고)
+20. [트러블슈팅 — 기존 K8s Secret 이 남아있을 때](#20-트러블슈팅--기존-k8s-secret-이-남아있을-때)
+21. [트러블슈팅 — namespace 가 Terminating 에 걸림](#21-트러블슈팅--namespace-가-terminating-에-걸림)
+22. [트러블슈팅 — vault-0 이 Ready 안 됨](#22-트러블슈팅--vault-0-이-01-running-에서-멈춤)
+23. [트러블슈팅 — `helm upgrade` 가 `has no deployed releases` 로 실패](#23-트러블슈팅--helm-upgrade-가-has-no-deployed-releases-로-실패)
 
 ---
 
@@ -53,13 +56,14 @@ validate.sh 는 `~/bin` 에 설치된 도구도 자동으로 PATH 에 추가한�
 | `RESET_STALE_SECRETS=yes` | (bootstrap 전용) 기존 VSO-managed Secret 삭제 후 재생성 |
 | `AUTO_GENERATE=yes` | (vault-seed-apps 전용) 비대화 + env 없음 시 랜덤 비밀번호 생성 |
 
-Registry auth 가 제거되어 `VAULT_PUSH_PASSWORD` / `VAULT_PULL_PASSWORD` 는 더 이상 사용하지 않는다. 앱 시크릿 5 개는 Phase 6 에서 대화형으로 입력받거나 env var 로 주입 (guide §4).
+Registry auth 가 제거되어 `VAULT_PUSH_PASSWORD` / `VAULT_PULL_PASSWORD` 는 더 이상 사용하지 않는다. 앱 시크릿 5 개는 Phase 6 에서 대화형으로 입력받거나 env var 로 주입 (guide §7).
 
 ### 클러스터 전제
 
 - Kubernetes 1.25+ (Pod Security Admission 사용)
 - `local-path` StorageClass (K3s 기본) 또는 동등한 RWO 프로비저너
 - `kubernetes.io/metadata.name` namespace 라벨이 자동으로 붙는 1.22+ 환경
+- dev 클러스터의 K3s 기본 Traefik 이 `kube-system` namespace 에 존재해야 함
 
 ---
 
@@ -107,6 +111,10 @@ AUTO_GENERATE=yes bash k8s/scripts/bin/bootstrap.sh dev
 
 스크립트는 idempotent 다. 이미 진행된 단계는 자동 스킵된다.
 
+> 주의: 현재 `bootstrap.sh` 는 `mnt` namespace 자원까지만 자동 배포한다. `k8s/overlays/dev/platform/traefik/` 와 `k8s/overlays/dev/tls/` 는 namespace 가 다르거나 optional dependency 가 있어 운영자가 별도로 적용한다.
+>
+> `k8s/overlays/dev/platform/cert-manager/`, `k8s/overlays/dev/platform/keycloak-operator/`, `k8s/overlays/dev-with-forward-auth/`, `k8s/overlays/dev/keycloak-realm/` 은 CRD / 외부 DNS / 인증 흐름 의존성이 있어 자동 부트스트랩 대상이 아니다.
+
 ### 생성되는 파일
 
 - `vault-init-keys.json` — **unseal keys (5 개) + root token**. 권한 0600 으로 저장. **반드시 오프라인 금고 / 외부 KMS 로 이동**하고 원본은 삭제한다. `.gitignore` 에 등록되어 있으나 실수로도 커밋하지 말 것.
@@ -138,7 +146,7 @@ kubectl apply -k k8s/base/managing/namespace   # namespace 선행
 kubectl apply -k k8s/overlays/dev/
 ```
 
-`mnt` namespace 와 Vault / Registry / 앱 워크로드가 선언된다. Registry 는 auth 가 없어서 바로 Running. Postgres / Keycloak / auth-server 는 Vault secret 이 주입되기 전까지 `ContainerCreating` 으로 대기 (정상).
+`mnt` namespace 와 Vault / Registry / 앱 워크로드가 선언된다. Registry 는 MinIO S3 자격증명 Secret 이 주입되기 전까지 대기할 수 있다. Postgres / Keycloak / auth-server 도 Vault secret 이 주입되기 전까지 `ContainerCreating` 으로 대기한다 (정상).
 
 ### 3-3. Vault Pod Running 대기
 
@@ -170,7 +178,7 @@ REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vault-init.sh
 REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vso-install.sh
 ```
 
-`helm upgrade --install --wait --timeout 5m` 으로 실행. 시작 시 기존 릴리즈가 `failed`/`pending*`/`uninstalling` 상태면 자동 uninstall 후 재설치 (guide §20 참고). `--values` 는 `k8s/base/plugins/vso/helm/values.yaml`.
+`helm upgrade --install --wait --timeout 5m` 으로 실행. 시작 시 기존 릴리즈가 `failed`/`pending*`/`uninstalling` 상태면 자동 uninstall 후 재설치 (guide §23 참고). `--values` 는 `k8s/base/plugins/vso/helm/values.yaml`.
 
 ### 3-6. VSO CRDs 적용
 
@@ -178,11 +186,197 @@ REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vso-install.sh
 kubectl apply -k k8s/overlays/dev/vso/
 ```
 
-`VaultConnection` / `VaultAuth` × 2 가 등록된다. `VaultStaticSecret` 은 dev overlay 각 서브디렉토리 (`database/`, `keycloak/`, `storage/`) 에서 이미 함께 적용됨. VSO Operator 가 Vault KV 를 읽어 K8s Secret 을 합성 — 단, **해당 Vault KV 경로에 값이 실제로 있어야 성공**. 아직 없으면 VSO 가 permission denied 또는 not found 로 남음. guide §4 의 수동 주입 후 자동 재시도.
+`VaultConnection` / `VaultAuth` × 2 가 등록된다. `VaultStaticSecret` 은 dev overlay 각 서브디렉토리 (`database/`, `keycloak/`, `storage/`) 에서 이미 함께 적용됨. VSO Operator 가 Vault KV 를 읽어 K8s Secret 을 합성 — 단, **해당 Vault KV 경로에 값이 실제로 있어야 성공**. 아직 없으면 VSO 가 permission denied 또는 not found 로 남음. guide §7 의 수동 주입 후 자동 재시도.
 
 ---
 
-## 4. Vault 시크릿 관리
+## 4. Traefik / Ingress 운영
+
+### 왜 별도 overlay 인가
+
+`k8s/overlays/dev/kustomization.yaml` 은 `namespace: mnt` 를 전역으로 주입한다. 반면 K3s 기본 Traefik 은 실제로 `kube-system` 에 존재한다. 그래서 Traefik 운영 리소스는 같은 kustomization 안에 섞지 않고 `k8s/overlays/dev/platform/traefik/` 로 분리했다.
+
+### 적용 대상
+
+| overlay | namespace | 설명 |
+|---|---|---|
+| `k8s/overlays/dev/platform/traefik` | `kube-system` | `HelmChartConfig` + `Middleware` + `TLSOption` |
+| `k8s/overlays/dev/` | `mnt` | `auth-server`, `keycloak` 의 app Ingress 및 app NetworkPolicy |
+
+### Traefik 운영 overlay 적용
+
+```bash
+kubectl apply -k k8s/overlays/dev/platform/traefik
+```
+
+포함되는 것:
+
+- `HelmChartConfig/traefik`
+  `replicas=2`, `ingressClass=traefik`, HTTP→HTTPS redirect, metrics 활성화
+- `Middleware/security-headers`
+  HSTS, `X-Content-Type-Options`, frame deny 등 공용 헤더
+- `TLSOption/modern-tls`
+  TLS 1.2+, strict SNI, 허용 cipher suite
+
+### 앱 Ingress 현재 상태
+
+| 리소스 | host | 공개 범위 |
+|---|---|---|
+| `auth-server` | `project.com` | `/` |
+| `keycloak-public` | `keycloak.dev.example.com` | `/realms/`, `/resources/`, `/.well-known/`, `/js/` |
+
+app Pod 는 기본 deny 상태이므로, Traefik 에서 들어오는 8080/TCP 만 NetworkPolicy 로 별도 허용한다.
+
+### 현재 범위 밖
+
+- Traefik 에서 직접 Keycloak 인증을 검사하는 `ForwardAuth` 계층
+- 외부 DNS / LB / firewall
+- cert-manager 설치 전 실제 TLS secret 생성
+
+최종 목표가 “인증되지 않은 사용자를 ingress 단에서 차단”이라면 다음 단계는 일반적으로 `Traefik ForwardAuth -> oauth2-proxy -> Keycloak` 이다. Keycloak 단독으로 Ingress 가 인증 판단을 직접 수행하진 않는다.
+
+### ForwardAuth variant 적용
+
+repo 에는 선택형 component `k8s/components/forward-auth/` 와 이를 결합한 overlay `k8s/overlays/dev-with-forward-auth/` 가 준비되어 있다. 기본 `dev` 전체를 포함한 뒤 oauth2-proxy 와 `auth-server` 보호 middleware 를 덧씌우는 방식이라, 기본 dev 운영과 인증 실험 구성을 깔끔하게 분리할 수 있다.
+
+적용 전제:
+
+1. `k8s/overlays/dev/keycloak-realm/` 또는 동등한 방법으로 `platform` realm + `auth-server-ingress` client 준비
+2. redirect URI 를 `https://project.com/oauth2/callback` 로 등록
+3. Vault path `secret/oauth2-proxy/forward-auth` 에 아래 key 저장
+   `client-secret`
+   `cookie-secret`
+4. `project.com`, `keycloak.dev.example.com` 이 실제 Traefik 진입점으로 해석
+
+적용:
+
+```bash
+kubectl apply -k k8s/overlays/dev-with-forward-auth
+```
+
+이 overlay 가 추가하는 것:
+
+- `oauth2-proxy` Deployment / Service
+- `project.com/oauth2/` 경로용 Ingress
+- `oauth2-proxy-auth` Traefik `Middleware`
+- `auth-server` Ingress patch
+  `project.com/` 요청은 oauth2-proxy ForwardAuth 를 먼저 통과해야 함
+
+현재 dev 용 oauth2-proxy 설정은 `ssl_insecure_skip_verify=true` 를 사용한다. 아직 외부 DNS 와 ACME 인증서 발급까지 완료된 상태가 아니라 Keycloak 공개 호스트 인증서 체인이 안정적으로 준비되지 않았기 때문이다. `cert-manager` + 정식 `Certificate` 도입 후에는 이 옵션을 제거해야 한다.
+
+### 이걸 적용하면 끝인가
+
+아직 아니다. `k8s/overlays/dev-with-forward-auth` 까지 적용해도 다음이 남아 있으면 운영 완료로 보지 않는다.
+
+1. `cert-manager` 설치 및 `ClusterIssuer` 준비
+2. `project.com`, `keycloak.dev.example.com` DNS 연결
+3. Keycloak realm/client 실제 적용
+4. Vault secret `secret/oauth2-proxy/forward-auth` 실제 저장
+5. 브라우저 로그인, callback, logout 흐름 검증
+6. 인증되지 않은 요청이 `auth-server` 에 직접 도달하지 못하는지 negative test
+7. `ssl_insecure_skip_verify=true` 제거
+
+즉, 지금 단계는 “배포 가능한 구성 + 문서 + 검증 가능한 뼈대”까지이며, **실제 dev 운영 완료**는 위 체크리스트까지 끝나야 한다.
+
+---
+
+## 5. TLS / cert-manager 적용
+
+cert-manager 는 repo source of truth 로 편입되어 있다. dev 기준 설치 overlay 는 `k8s/overlays/dev/platform/cert-manager/` 이며, 공식 static install `v1.20.2` 를 적용한다. `ClusterIssuer` 는 CRD 등록 이후 `k8s/overlays/dev/platform/cert-manager-issuers/` 로 별도 적용한다.
+
+적용:
+
+```bash
+kubectl apply -k k8s/overlays/dev/platform/cert-manager
+kubectl -n cert-manager rollout status deploy/cert-manager --timeout=180s
+kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=180s
+kubectl -n cert-manager rollout status deploy/cert-manager-cainjector --timeout=180s
+kubectl apply -k k8s/overlays/dev/platform/cert-manager-issuers
+```
+
+주의:
+
+- `letsencrypt-prod-clusterissuer.yaml` / `letsencrypt-staging-clusterissuer.yaml` 의 `admin@project.com` 은 실제 수신 가능한 운영 메일로 교체한다.
+- HTTP-01 은 `project.com`, `keycloak.dev.example.com` 이 Traefik 외부 진입점으로 해석되고 80/443 이 도달 가능해야 성공한다.
+
+### 준비된 리소스
+
+| 파일 | secretName | host |
+|---|---|---|
+| `k8s/overlays/dev/tls/project-com-certificate.yaml` | `project-com-tls` | `project.com` |
+| `k8s/overlays/dev/tls/keycloak-dev-certificate.yaml` | `keycloak-dev-example-com-tls` | `keycloak.dev.example.com` |
+
+### Certificate 적용
+
+전제:
+
+- `cert-manager` CRD 설치 완료
+- `ClusterIssuer/letsencrypt-prod` 또는 동등한 issuer 준비
+- DNS 가 실제 Traefik 진입점으로 향함
+
+적용:
+
+```bash
+kubectl apply -k k8s/overlays/dev/tls
+```
+
+그 다음 Ingress 의 TLS secret 연결과 인증서 Ready 상태를 확인한다. 인증서 발급이 끝난 뒤 `dev-with-forward-auth` 의 `ssl_insecure_skip_verify=true` 를 제거하는 것이 마무리 목표다.
+
+---
+
+## 6. Keycloak Operator / RealmImport 적용
+
+Keycloak 은 권장 흐름에 맞춰 Operator 기반으로 전환한다. dev 제약상 실제 Keycloak 인스턴스와 realm/client 는 `mnt` 에 두며, Keycloak Operator 도 `mnt` 에 설치해 해당 namespace 를 watch 하게 한다.
+
+`mnt` 는 default-deny egress namespace 이므로, `k8s/overlays/dev/platform/keycloak-operator/networkpolicy.yaml` 이 Operator Pod 에서 Kubernetes API 로 나가는 443/6443 만 허용한다. 이 정책이 없으면 Operator informer 가 API server 에 연결하지 못해 CrashLoopBackOff 로 떨어진다.
+
+### 왜 필요한가
+
+- `oauth2-proxy` 는 `auth-server-ingress` client 를 전제로 동작한다
+- client / redirect URI 같은 OIDC 계약은 Git 에서 관리되어야 drift 가 줄어든다
+- 표준도 Keycloak realm 을 `KeycloakRealmImport` 로 선언형 관리하라고 권장한다
+
+### 적용 순서
+
+1. Keycloak Operator CRD / controller 적용
+
+```bash
+kubectl apply -k k8s/overlays/dev/platform/keycloak-operator
+kubectl -n mnt rollout status deploy/keycloak-operator --timeout=180s
+```
+
+2. 기존 수제 Keycloak 리소스 정리
+
+기존 `Deployment` 기반 Keycloak 과 Operator 기반 Keycloak 이 같은 `Service/keycloak` 이름을 쓰므로, 전환 시 기존 수제 리소스를 정리한다.
+
+```bash
+kubectl -n mnt delete deployment/keycloak service/keycloak configmap/keycloak-config serviceaccount/keycloak-sa --ignore-not-found
+```
+
+3. dev overlay 적용
+
+`k8s/overlays/dev/keycloak/` 는 이제 `Keycloak` CR, VSO secret 변환, Ingress, NetworkPolicy 를 포함한다.
+
+```bash
+kubectl apply -k k8s/overlays/dev
+kubectl -n mnt get keycloak keycloak
+kubectl -n mnt get pods -l app.kubernetes.io/instance=keycloak
+```
+
+4. RealmImport 적용
+
+```bash
+kubectl apply -k k8s/overlays/dev/keycloak-realm
+kubectl -n mnt get keycloakrealmimport platform-realm
+```
+
+### client secret 처리
+
+`auth-server-ingress` 같은 confidential client 의 secret 값 자체는 Git 에 넣지 않는다. realm/client shape 는 Git 에 두고, secret 값은 생성 후 Vault path `secret/oauth2-proxy/forward-auth` 로 넣어 oauth2-proxy 가 소비하게 한다.
+
+---
+
+## 7. Vault 시크릿 관리
 
 ### 애플리케이션 시크릿 저장 — 자동화됨 (`tasks/vault-seed-apps.sh`)
 
@@ -209,6 +403,7 @@ Vault CLI 의 `vault kv put <path> -` 모드로 **JSON stdin 전달** 이라 비
 | `secret/auth-server/db` | `SPRING_DATASOURCE_USERNAME` (기본 auth_server), `SPRING_DATASOURCE_PASSWORD` | Spring Boot configtree + Flyway |
 | `secret/keycloak/bootstrap-admin` | `KEYCLOAK_ADMIN` (기본 admin), `KEYCLOAK_ADMIN_PASSWORD` | Keycloak 초기 관리자 계정 |
 | `secret/minio/tenant-env` | `config.env` (env-file 포맷 단일 키) | MinIO Operator Tenant 루트 자격증명 |
+| `secret/oauth2-proxy/forward-auth` | `client-secret`, `cookie-secret` | `dev-with-forward-auth` overlay 의 oauth2-proxy confidential client / session cookie |
 
 ### 값 조회
 
@@ -261,20 +456,29 @@ vault token revoke <old-root-token>
 
 ---
 
-## 5. Docker Registry 사용법
+## 8. Docker Registry 사용법
 
 ### Push
 
 ```bash
-docker login docker-registry.mnt.svc.cluster.local:5000
-# username: push-user
-# password: <VAULT_PUSH_PASSWORD 로 저장한 값>
+docker login registry.project.com
+# username: <DOCKER_REGISTRY_PUSH_USERNAME, 기본 registry-push>
+# password: <DOCKER_REGISTRY_PUSH_PASSWORD 로 seed 한 값>
 
+docker tag my-app:0.1.0 registry.project.com/my-app:0.1.0
+docker push registry.project.com/my-app:0.1.0
+```
+
+외부 push 는 `registry.project.com` Ingress 로 들어오며 Traefik BasicAuth 를 통과해야 한다. BasicAuth 의 htpasswd `users` 값은 Vault path `secret/docker-registry/basic-auth` 에 저장되고 VSO 가 `docker-registry-basic-auth` Secret 으로 동기화한다.
+
+실제 워크로드 이미지는 `registry.project.com/...` 주소를 사용한다. image pull 은 Pod 내부가 아니라 노드의 kubelet/containerd 가 수행하므로, `docker-registry.mnt.svc.cluster.local` 같은 ClusterIP DNS 를 `image:`에 쓰는 방식은 피한다. 앱 ServiceAccount 는 VSO 가 만드는 `docker-registry-pull-credentials` imagePullSecret 을 사용한다.
+
+내부 Service 는 registry Pod 자체 확인이나 클러스터 내부 HTTP 접근이 필요할 때만 사용한다.
+
+```bash
 docker tag my-app:0.1.0 docker-registry.mnt.svc.cluster.local:5000/my-app:0.1.0
 docker push docker-registry.mnt.svc.cluster.local:5000/my-app:0.1.0
 ```
-
-Registry 는 auth 가 없으므로 `docker login` 불필요. 외부 노출 없으므로 push 는 오직 클러스터 내부에서만 (또는 `kubectl port-forward` 로 로컬 터널). 외부에서 push 하려면 별도 Ingress + TLS + auth proxy 구성 필요 (현재 범위 밖).
 
 ### Pull (Pod)
 
@@ -284,18 +488,80 @@ kind: Deployment
 spec:
   template:
     spec:
-      imagePullSecrets:
-        - name: registry-pull-credential
+      serviceAccountName: auth-server-sa
       containers:
         - name: my-app
-          image: docker-registry.mnt.svc.cluster.local:5000/my-app:0.1.0
+          image: registry.project.com/my-app:0.1.0
 ```
 
-`registry-pull-credential` 은 VSO 가 `secret/docker-registry/pull-credentials` 로부터 `kubernetes.io/dockerconfigjson` 타입으로 합성한 Secret 이다. `.auth` 필드는 `base64("<username>:<password>")` 로 올바르게 인코딩된다.
+`auth-server-sa` / `test-server-*-sa` 는 dev overlay 에서 `docker-registry-pull-credentials` 를 `imagePullSecrets` 로 참조한다.
+
+### auth-server 이미지 빌드 / push / 검증 예시
+
+2026-04-26 dev 환경에서 `auth-server:0.1.0` 을 검증할 때 사용한 명령이다. `registry.project.com` 경로가 노드에서 바로 pull 되려면 DNS/TLS 또는 k3s `registries.yaml` 설정이 먼저 준비되어야 한다. 해당 설정이 없는 로컬 검증에서는 port-forward 로 registry 에 push 한 뒤, 노드 containerd 에 같은 image ref 를 import 해서 Pod 기동을 확인했다.
+
+```bash
+# 1. 애플리케이션 이미지 빌드
+cd /home/donghyeon/dev/Project-Auth-Server
+docker build --provenance=false \
+  -f deploy/docker/application/Dockerfile \
+  -t localhost:5000/auth-platform/auth-server:0.1.0 .
+
+# 2. 내부 registry 로컬 포트 오픈
+cd /home/donghyeon/dev/Project-Infra
+kubectl -n mnt port-forward --address 127.0.0.1 svc/docker-registry 5000:5000
+
+# 3. registry BasicAuth 값을 Vault KV 에 저장
+HTPASSWD_LINE="testuser:$(openssl passwd -apr1 abcd6845)"
+kubectl -n mnt exec vault-0 -- vault kv put secret/docker-registry/basic-auth \
+  username=testuser \
+  password=abcd6845 \
+  users="$HTPASSWD_LINE"
+
+# 4. VSO storage policy 가 registry KV 를 읽을 수 있는지 확인 / 보정
+kubectl -n mnt exec vault-0 -- vault policy read vso-storage
+printf '%s\n' \
+  'path "secret/data/minio/*" {' \
+  '  capabilities = ["read"]' \
+  '}' \
+  'path "secret/data/docker-registry/*" {' \
+  '  capabilities = ["read"]' \
+  '}' \
+  | kubectl -n mnt exec -i vault-0 -- vault policy write vso-storage -
+
+# 5. image push 및 registry 확인
+docker push localhost:5000/auth-platform/auth-server:0.1.0
+curl http://127.0.0.1:5000/v2/auth-platform/auth-server/tags/list
+
+# 6. source of truth 인 Project-Infra overlay 적용
+kubectl apply --server-side --field-manager=codex-dev --force-conflicts -k k8s/overlays/dev/auth
+kubectl -n mnt wait --for=create secret/docker-registry-pull-credentials --timeout=120s
+kubectl -n mnt get secret docker-registry-pull-credentials -o jsonpath='{.type}{"\n"}'
+
+# 7. registry.project.com pull 이 아직 노드에서 불가할 때의 임시 검증용 import
+docker tag localhost:5000/auth-platform/auth-server:0.1.0 registry.project.com/auth-platform/auth-server:0.1.0
+docker save registry.project.com/auth-platform/auth-server:0.1.0 -o /tmp/auth-server-0.1.0.tar
+kubectl debug node/dev-cp-1 --image=busybox --profile=sysadmin -- sleep 3600
+kubectl cp /tmp/auth-server-0.1.0.tar default/<node-debug-pod>:/host/tmp/auth-server-0.1.0.tar
+kubectl exec -n default <node-debug-pod> -- chroot /host k3s ctr -n k8s.io images import /tmp/auth-server-0.1.0.tar
+# dev-wk-1, dev-wk-2 에도 같은 방식으로 반복한다.
+
+# 8. 배포 / health 검증
+kubectl -n mnt delete job migration-flyway
+kubectl apply --server-side --field-manager=codex-dev --force-conflicts -k k8s/overlays/dev/auth
+kubectl -n mnt wait --for=condition=complete job/migration-flyway --timeout=180s
+kubectl -n mnt rollout restart deployment/auth-server
+kubectl -n mnt rollout status deployment/auth-server --timeout=240s
+kubectl -n mnt get pods -o wide
+kubectl -n mnt port-forward svc/auth-server 18081:8081
+curl -fsS http://127.0.0.1:18081/actuator/health/readiness
+```
+
+정상 결과는 registry tag 응답에 `0.1.0` 이 포함되고, pull secret 타입이 `kubernetes.io/dockerconfigjson` 이며, readiness 응답이 `{"status":"UP"}` 이다.
 
 ---
 
-## 6. 앱에서 시크릿 사용하기
+## 9. 앱에서 시크릿 사용하기
 
 ### envFrom (권장)
 
@@ -335,7 +601,7 @@ containers:
 
 ---
 
-## 7. 마이그레이션 실행 (Flyway)
+## 10. 마이그레이션 실행 (Flyway)
 
 base 에 정의된 `migration-flyway` Job 은 기본적으로는 배포되지 않는다. dev overlay 가 ArgoCD PreSync / sync-wave=-1 annotation 을 patch 하므로, GitOps 로 배포할 때는 ArgoCD 가 앱보다 먼저 Job 을 실행한다.
 
@@ -365,7 +631,7 @@ kubectl apply -k k8s/overlays/dev/auth/
 
 ---
 
-## 8. Vault UI 접근
+## 11. Vault UI 접근
 
 `service-ui` NodePort 는 보안상 제거되었다. 관리자는 port-forward 로만 접근한다.
 
@@ -379,7 +645,7 @@ root token 은 최초 설정 / 비상 복구 외에는 사용하지 않는다. �
 
 ---
 
-## 9. 환경별 배포
+## 12. 환경별 배포
 
 현재 `dev` 만 구성되어 있다.
 
@@ -396,7 +662,7 @@ staging / prod overlay 는 비어 있으며, 추후 다음 요소를 추가한�
 
 ---
 
-## 10. 검증 / 린트 / 스키마 체크
+## 13. 검증 / 린트 / 스키마 체크
 
 ```bash
 bash k8s/scripts/ci/validate.sh
@@ -420,7 +686,7 @@ CI 파이프라인에서 이 스크립트를 PR 게이트로 사용한다. 실�
 
 ---
 
-## 11. 정리 / 롤백 (teardown)
+## 14. 정리 / 롤백 (teardown)
 
 ```bash
 # 대화형 (y/N 확인)
@@ -463,20 +729,21 @@ kubectl delete pv <name>
 
 ---
 
-## 12. 트러블슈팅
+## 15. 트러블슈팅
 
 ### Registry Pod 가 계속 `ContainerCreating`
 
-Secret `docker-registry-htpasswd` 가 아직 생성되지 않은 상태. VSO 가 Vault KV 를 읽어서 만든다.
+Secret `docker-registry-minio` 또는 `docker-registry-basic-auth` 가 아직 생성되지 않은 상태일 수 있다. VSO 가 Vault KV 를 읽어서 만든다.
 
 ```bash
-kubectl -n mnt describe vaultstaticsecret docker-registry-htpasswd
+kubectl -n mnt describe vaultstaticsecret docker-registry-minio
+kubectl -n mnt describe vaultstaticsecret docker-registry-basic-auth
 kubectl -n mnt logs -l app.kubernetes.io/name=vault-secrets-operator --tail=100
 ```
 
 자주 보는 에러:
 - `permission denied` → Vault policy 또는 role 설정 오류. `tasks/vault-init.sh` 재실행.
-- `no matching vault path` → Vault KV 에 값이 저장되지 않음. `tasks/vault-seed-registry.sh` 재실행.
+- `no matching vault path` → Vault KV 에 값이 저장되지 않음. `tasks/vault-seed-apps.sh` 재실행.
 
 ### VSO 가 Vault 에 로그인 실패
 
@@ -532,7 +799,7 @@ kubectl -n mnt delete networkpolicy default-deny-all
 
 ---
 
-## 13. etcd encryption at rest
+## 16. etcd encryption at rest
 
 VSO 가 만드는 K8s Secret 은 기본적으로 **etcd 에 base64 로만 저장된다 (평문과 동일)**. 운영 전 반드시 암호화를 켠다.
 
@@ -637,7 +904,7 @@ sudo ETCDCTL_API=3 etcdctl \
 
 ---
 
-## 14. Vault 운영자 토큰 관리
+## 17. Vault 운영자 토큰 관리
 
 root token 은 **비상시(rekey / generate-root / 전체 복구) 전용**으로만 사용한다. 평시 작업은 개인별 계정 + `vault-admin` policy 로 수행한다.
 
@@ -742,7 +1009,7 @@ vault audit enable socket address=loki-syslog.monitoring.svc:514 socket_type=tcp
 
 ---
 
-## 15. bash history 에 비밀번호 남기지 않기
+## 18. bash history 에 비밀번호 남기지 않기
 
 `VAR=value command` 형태로 env var 를 명령줄에 직접 적으면 **그대로 `~/.bash_history` 에 저장**된다. 대응:
 
@@ -753,7 +1020,7 @@ bash k8s/scripts/bin/bootstrap.sh dev
 # 프롬프트에서 무음 입력 (echo 안 됨)
 ```
 
-본 프로젝트의 모든 스크립트 (`bootstrap.sh`, `tasks/vault-seed-registry.sh`, `tasks/vault-setup-admin.sh`) 는 env var 가 비어 있으면 TTY 에서 자동으로 `read -r -s` 프롬프트로 전환한다.
+본 프로젝트의 모든 시크릿 seed 스크립트 (`bootstrap.sh`, `tasks/vault-seed-apps.sh`, `tasks/vault-setup-admin.sh`) 는 env var 가 비어 있으면 TTY 에서 자동으로 `read -r -s` 프롬프트로 전환한다.
 
 ### 비대화 (CI) 실행 시
 
@@ -775,7 +1042,7 @@ set -o history
 
 ---
 
-## 16. 트러블슈팅 — PodSecurity 위반 경고
+## 19. 트러블슈팅 — PodSecurity 위반 경고
 
 `kubectl apply` 중 `Warning: would violate PodSecurity "restricted:latest": ...` 메시지가 뜨면 **어떤 Pod 의 어떤 필드** 가 위반인지 확인:
 
@@ -805,13 +1072,13 @@ kubectl apply -k k8s/overlays/dev/ 2>&1 | grep -i warning
 
 양쪽 모두 Operator 의 Pod 이고, 자기 namespace(`vault-secrets-operator-system` / `minio-operator`)에서 돌아가므로 `mnt` 의 PSS 와 무관. `mnt` 안의 Pod 에서 경고가 나면 매니페스트를 수정해야 함.
 
-### 자주 걸리는 특수 케이스 — `htpasswd-gen-*` 임시 Pod
+### 참고 — Registry BasicAuth
 
-`vault-seed-registry.sh` 가 bcrypt htpasswd 생성을 위해 `mnt` 에 임시 `httpd:2.4-alpine` Pod 를 띄운다. 이 Pod 는 `kubectl run` 기본값이 아닌 **완전한 Restricted spec** (runAsNonRoot, drop ALL, allowPrivilegeEscalation=false, seccompProfile RuntimeDefault) 이 필요하며 현재 스크립트는 `kubectl apply -f -` heredoc 으로 해당 필드를 명시적으로 지정한다. 만약 이 Pod 생성에서 PSS 위반 에러가 뜬다면 `tasks/vault-seed-registry.sh` 의 Pod manifest 가 최신 버전인지 확인.
+외부 push 용 BasicAuth 는 더 이상 임시 `htpasswd-gen-*` Pod 를 만들지 않는다. `tasks/vault-seed-apps.sh` 가 `openssl passwd -apr1` 로 htpasswd 한 줄을 만들고 Vault path `secret/docker-registry/basic-auth` 에 `users` 키로 저장한다. VSO 는 이를 `docker-registry-basic-auth` Secret 으로 동기화하고, Traefik Middleware 가 외부 Ingress 에서 검증한다.
 
 ---
 
-## 17. 트러블슈팅 — 기존 K8s Secret 이 남아있을 때
+## 20. 트러블슈팅 — 기존 K8s Secret 이 남아있을 때
 
 VSO 는 `destination.overwrite: false` 기본값이라 **이미 존재하는 Secret 을 덮어쓰지 않는다**. Vault KV 에 새 값을 넣어도 K8s Secret 은 옛날 값을 유지.
 
@@ -825,7 +1092,7 @@ kubectl -n mnt get secret -l 'kubernetes.io/managed-by!=Helm' \
 ### 해결 1 — 개별 삭제 후 VSO 재생성
 
 ```bash
-kubectl -n mnt delete secret docker-registry-htpasswd registry-pull-credential
+kubectl -n mnt delete secret docker-registry-minio docker-registry-basic-auth
 # VSO 가 1-2 분 내 Vault KV 에서 읽어 재생성
 kubectl -n mnt get vaultstaticsecret
 ```
@@ -841,7 +1108,33 @@ RESET_STALE_SECRETS=yes bash k8s/scripts/bin/bootstrap.sh dev
 
 ---
 
-## 19. 트러블슈팅 — vault-0 이 `0/1 Running` 에서 멈춤
+## 21. 트러블슈팅 — namespace 가 Terminating 에 걸림
+
+`mnt` namespace 가 `Terminating` 에서 오래 멈추면 보통 다음 셋 중 하나다.
+
+- controller 가 이미 사라졌는데 CRD finalizer 가 남아 있음
+- PVC protection finalizer 가 남아 있음
+- namespaced 리소스 일부가 finalizer 때문에 삭제 완료를 못 함
+
+현재 `teardown.sh` 는 이 상황을 고려해 단계적으로 정리한다.
+
+1. `VaultStaticSecret / VaultAuth / VaultConnection` finalizer 제거
+2. PVC 보호 finalizer 제거
+3. 남은 namespaced 리소스 finalizer 일괄 제거
+4. 마지막에 namespace `/finalize` 호출
+
+수동 확인:
+
+```bash
+kubectl get namespace mnt -o yaml
+kubectl api-resources --verbs=list --namespaced -o name | xargs -n 1 kubectl -n mnt get --ignore-not-found
+```
+
+이미 teardown 을 사용 중이라면 대부분은 스크립트가 자동 처리한다. 수동 개입은 정말 스크립트가 실패했을 때만 한다.
+
+---
+
+## 22. 트러블슈팅 — vault-0 이 `0/1 Running` 에서 멈춤
 
 ### 현상
 
@@ -886,7 +1179,7 @@ kubectl -n mnt get pod vault-0
 # Phase 4 까지는 apply + Pod Running 완료 상태
 # 남은 Phase 5~8 만 수동 실행
 REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vault-init.sh             # Phase 5
-REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vault-seed-registry.sh    # Phase 6
+REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vault-seed-apps.sh        # Phase 6
 REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vso-install.sh            # Phase 7
 kubectl apply -k k8s/overlays/dev/vso/                              # Phase 8
 ```
@@ -895,7 +1188,7 @@ kubectl apply -k k8s/overlays/dev/vso/                              # Phase 8
 
 ### 참고 — 다른 Pod 들이 `ContainerCreating` 상태
 
-`auth-server`, `keycloak`, `identity-postgres`, `docker-registry`, `migration-flyway` 가 `ContainerCreating` 에 머무는 건 **VSO 가 만드는 K8s Secret 이 아직 없어서** volume mount 가 대기 중인 것. Vault 초기화 + 앱 secret 주입 (guide §4) + VSO sync 가 끝나면 차례로 Running 으로 전환된다. 정상 동작.
+`auth-server`, `keycloak`, `identity-postgres`, `docker-registry`, `migration-flyway` 가 `ContainerCreating` 에 머무는 건 **VSO 가 만드는 K8s Secret 이 아직 없어서** volume mount 가 대기 중인 것. Vault 초기화 + 앱 secret 주입 (guide §7) + VSO sync 가 끝나면 차례로 Running 으로 전환된다. 정상 동작.
 
 ### 참고 — `test-server-*` 가 `ImagePullBackOff`
 
@@ -903,7 +1196,7 @@ kubectl apply -k k8s/overlays/dev/vso/                              # Phase 8
 
 ---
 
-## 20. 트러블슈팅 — `helm upgrade` 가 `has no deployed releases` 로 실패
+## 23. 트러블슈팅 — `helm upgrade` 가 `has no deployed releases` 로 실패
 
 ### 현상
 

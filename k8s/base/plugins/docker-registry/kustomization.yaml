@@ -5,8 +5,7 @@ resources:
   - serviceaccount.yaml
   - configmap.yaml
   - service.yaml
-  - service-headless.yaml
-  - statefulset.yaml
+  - deployment.yaml
 
 labels:
   - pairs:

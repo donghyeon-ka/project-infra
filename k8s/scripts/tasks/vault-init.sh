@@ -105,9 +105,12 @@ path "secret/data/keycloak/*" {
 EOF
 ' >/dev/null
 
-  log "policy 'vso-storage' 작성 (minio/*)"
+  log "policy 'vso-storage' 작성 (minio/*, docker-registry/*)"
   vault_exec_sh 'cat <<"EOF" | vault policy write vso-storage -
 path "secret/data/minio/*" {
+  capabilities = ["read"]
+}
+path "secret/data/docker-registry/*" {
   capabilities = ["read"]
 }
 EOF

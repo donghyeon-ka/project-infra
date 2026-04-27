@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: docker-registry-public
+  labels:
+    app.kubernetes.io/name: docker-registry
+    app.kubernetes.io/instance: docker-registry
+    app.kubernetes.io/version: "2.8.3"
+    app.kubernetes.io/component: registry
+    app.kubernetes.io/part-of: platform-registry
+    app.kubernetes.io/managed-by: kustomize
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.options: kube-system-modern-tls@kubernetescrd
+    traefik.ingress.kubernetes.io/router.middlewares: kube-system-https-redirect@kubernetescrd,kube-system-security-headers@kubernetescrd,mnt-docker-registry-basic-auth@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - registry.project.com
+      secretName: registry-project-com-tls
+  rules:
+    - host: registry.project.com
+      http:
+        paths:
+          - path: /v2
+            pathType: Prefix
+            backend:
+              service:
+                name: docker-registry
+                port:
+                  name: http

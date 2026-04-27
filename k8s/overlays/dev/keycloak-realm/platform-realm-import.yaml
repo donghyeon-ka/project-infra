@@ -1,0 +1,40 @@
+apiVersion: k8s.keycloak.org/v2beta1
+kind: KeycloakRealmImport
+metadata:
+  name: platform-realm
+  labels:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/instance: keycloak
+    app.kubernetes.io/version: "26.6.1"
+    app.kubernetes.io/component: identity-provider
+    app.kubernetes.io/part-of: auth-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  keycloakCRName: keycloak
+  realm:
+    realm: platform
+    enabled: true
+    sslRequired: external
+    registrationAllowed: false
+    loginWithEmailAllowed: true
+    accessTokenLifespan: 300
+    roles:
+      realm:
+        - name: platform-admin
+        - name: platform-user
+    clients:
+      - clientId: auth-server-ingress
+        name: auth-server-ingress
+        protocol: openid-connect
+        publicClient: false
+        clientAuthenticatorType: client-secret
+        secret: ${AUTH_SERVER_INGRESS_CLIENT_SECRET}
+        standardFlowEnabled: true
+        directAccessGrantsEnabled: false
+        serviceAccountsEnabled: false
+        redirectUris:
+          - https://project.com/oauth2/callback
+        webOrigins:
+          - https://project.com
+        rootUrl: https://project.com
+        baseUrl: https://project.com

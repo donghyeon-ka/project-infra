@@ -30,6 +30,18 @@
 #   MINIO_ROOT_USER               기본 minioadmin
 #   MINIO_ROOT_PASSWORD
 #
+#   AUTH_SERVER_INGRESS_CLIENT_SECRET   Keycloak realm client 'auth-server-ingress' 의 secret.
+#                                       KeycloakRealmImport 가 ${AUTH_SERVER_INGRESS_CLIENT_SECRET}
+#                                       env 치환으로 가져간다. oauth2-proxy 도 동일 값을 받음.
+#
+#   DOCKER_REGISTRY_MINIO_ACCESSKEY     docker-registry 가 MinIO 에 접근할 때 쓸 AK.
+#                                       기본값 'docker-registry'. MinIO user 이름이 됨.
+#   DOCKER_REGISTRY_MINIO_SECRETKEY     docker-registry MinIO SK (대소문자+숫자 8자 이상).
+#
+#   DOCKER_REGISTRY_PUSH_USERNAME       외부 Ingress push 용 BasicAuth username.
+#                                       기본값 'registry-push'.
+#   DOCKER_REGISTRY_PUSH_PASSWORD       외부 Ingress push 용 BasicAuth password.
+#
 # Options:
 #   AUTO_GENERATE=yes   대화형 TTY 가 아니고 env 도 비었을 때 랜덤 값 생성
 #
@@ -46,6 +58,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${AUTH_SERVER_DB_USERNAME:=auth_server}"
 : "${KEYCLOAK_ADMIN_USERNAME:=admin}"
 : "${MINIO_ROOT_USER:=minioadmin}"
+: "${DOCKER_REGISTRY_MINIO_ACCESSKEY:=docker-registry}"
+: "${DOCKER_REGISTRY_PUSH_USERNAME:=registry-push}"
 
 generate_random_password() {
   openssl rand -base64 48 | tr -d '/+=' | head -c 24
@@ -169,6 +183,52 @@ seed_minio_tenant_env() {
   log "  secret/minio/tenant-env 작성"
 }
 
+# docker-registry 가 MinIO 에 접근할 때 쓸 AK/SK. 이 값으로 bootstrap 후속
+# phase 에서 MinIO admin user 를 만들고 bucket-scoped policy 를 부착한다.
+# registry Deployment 는 VSO 가 동기화한 Secret `docker-registry-minio` 에서
+# 동일 값을 REGISTRY_STORAGE_S3_ACCESSKEY / SECRETKEY 로 읽는다.
+seed_docker_registry_minio() {
+  seed_if_missing "docker-registry/minio" || return 0
+  local sk
+  sk="$(resolve_password DOCKER_REGISTRY_MINIO_SECRETKEY "docker-registry MinIO secret key")"
+  kv_put_json "docker-registry/minio" \
+    '{access_key: $ak, secret_key: $sk}' \
+    --arg ak "$DOCKER_REGISTRY_MINIO_ACCESSKEY" \
+    --arg sk "$sk"
+  log "  secret/docker-registry/minio 작성 (access_key=${DOCKER_REGISTRY_MINIO_ACCESSKEY})"
+}
+
+# 외부에서 registry.project.com 으로 push 할 때 Traefik BasicAuth 가 검증할
+# htpasswd 라인을 저장한다. Registry 자체 auth 는 켜지지 않고, 외부 Ingress
+# 경계에서만 인증한다.
+seed_docker_registry_basic_auth() {
+  seed_if_missing "docker-registry/basic-auth" || return 0
+  local pw hash users
+  pw="$(resolve_password DOCKER_REGISTRY_PUSH_PASSWORD "docker-registry 외부 push 비밀번호")"
+  hash="$(openssl passwd -apr1 "$pw")"
+  users="${DOCKER_REGISTRY_PUSH_USERNAME}:${hash}"
+  kv_put_json "docker-registry/basic-auth" \
+    '{username: $username, password: $password, users: $users}' \
+    --arg username "$DOCKER_REGISTRY_PUSH_USERNAME" \
+    --arg password "$pw" \
+    --arg users "$users"
+  log "  secret/docker-registry/basic-auth 작성 (username=${DOCKER_REGISTRY_PUSH_USERNAME})"
+}
+
+# Keycloak realm import 가 client secret 을 ${AUTH_SERVER_INGRESS_CLIENT_SECRET}
+# env 치환으로 요구한다. oauth2-proxy 는 동일 값을 /etc/oauth2-proxy-secrets/
+# client-secret 파일로 읽는다. 두 쪽이 같은 값을 써야 OIDC client 인증이 맞는다.
+seed_keycloak_client_auth_server_ingress() {
+  seed_if_missing "keycloak/clients/auth-server-ingress" || return 0
+  local pw
+  pw="$(resolve_password AUTH_SERVER_INGRESS_CLIENT_SECRET \
+        "Keycloak client 'auth-server-ingress' secret")"
+  kv_put_json "keycloak/clients/auth-server-ingress" \
+    '{client_secret: $p}' \
+    --arg p "$pw"
+  log "  secret/keycloak/clients/auth-server-ingress 작성"
+}
+
 main() {
   require_cmd kubectl jq openssl
   require_env REPO_ROOT
@@ -182,6 +242,9 @@ main() {
   seed_auth_server_db
   seed_keycloak_bootstrap_admin
   seed_minio_tenant_env
+  seed_keycloak_client_auth_server_ingress
+  seed_docker_registry_minio
+  seed_docker_registry_basic_auth
 
   log "vault-seed-apps 태스크 완료"
 }

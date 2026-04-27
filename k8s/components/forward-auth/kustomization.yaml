@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - ../../base/plugins/oauth2-proxy
+  - oauth2-proxy-config.yaml
+  - oauth2-proxy-vault-secrets.yaml
+  - oauth2-proxy-ingress.yaml
+  - oauth2-proxy-middleware.yaml
+  - oauth2-proxy-networkpolicy.yaml
+
+patches:
+  - target:
+      kind: Ingress
+      name: auth-server
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/traefik.ingress.kubernetes.io~1router.middlewares
+        value: kube-system-https-redirect@kubernetescrd,mnt-oauth2-proxy-auth@kubernetescrd,kube-system-security-headers@kubernetescrd

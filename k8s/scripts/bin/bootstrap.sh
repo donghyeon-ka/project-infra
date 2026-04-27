@@ -6,12 +6,16 @@
 #   1. Apply namespace + PSS labels           (kubectl apply -k base/managing/namespace)
 #   2. (optional) Reset stale K8s Secrets     (RESET_STALE_SECRETS=yes 일 때만)
 #   2.5 VSO CRD 선행 설치                     (VaultStaticSecret CR 가 overlay 에 포함돼 있어)
+#   2.6 cert-manager 선행 설치                (ClusterIssuer / Certificate CR 가 overlay 에 포함돼 있어)
+#   2.7 Keycloak Operator 선행 설치           (Keycloak / KeycloakRealmImport CR 가 overlay 에 포함돼 있어)
+#   2.8 Traefik HelmChartConfig + Middleware/TLSOption (kube-system 에 배치 — root overlay 의 `namespace: mnt` 와 충돌하므로 별도 apply)
 #   3. Render + diff + confirm + apply overlay  (--server-side --field-manager=project-infra-bootstrap)
 #   4. Wait for vault-0 Running
 #   5. Vault init + unseal + KV + k8s auth + policy / role  (tasks/vault-init.sh)
-#   6. Seed 5 application secrets             (tasks/vault-seed-apps.sh)
+#   6. Seed application secrets               (tasks/vault-seed-apps.sh)
 #   7. Helm install VSO                       (tasks/vso-install.sh)
 #   8. Apply VSO CRs                          (kubectl apply -k overlays/<env>/vso/)
+#   9. MinIO docker-registry bucket/user/policy 프로비저닝 (tasks/minio-provision-registry.sh)
 #
 # 대화형 실행 (bash history 에 비밀번호 남지 않음):
 #   bash k8s/scripts/bin/bootstrap.sh dev
@@ -45,9 +49,13 @@ FIELD_MANAGER="project-infra-bootstrap"
 VSO_MANAGED_SECRETS=(
   identity-postgres-superuser
   keycloak-db
+  keycloak-db-operator
   auth-server-db
   keycloak-bootstrap-admin
+  keycloak-bootstrap-admin-operator
+  keycloak-client-auth-server-ingress
   minio-tenant-env
+  docker-registry-minio
 )
 
 usage() {
@@ -90,19 +98,19 @@ precheck_namespace() {
 }
 
 phase0_minio_operator() {
-  log "[0/8] MinIO Operator 설치 (Tenant CRD 선행)"
+  log "[0/9] MinIO Operator 설치 (Tenant CRD 선행)"
   bash "$TASKS_DIR/minio-operator-install.sh"
 }
 
 phase1_namespace() {
-  log "[1/8] Namespace + PSS 라벨 선행 apply"
+  log "[1/9] Namespace + PSS 라벨 선행 apply"
   kubectl apply -k "$K8S_ROOT/base/managing/namespace" \
     --server-side --field-manager="$FIELD_MANAGER"
   retry 5 1 kubectl get namespace "$NAMESPACE" >/dev/null
 }
 
 phase2_reset_stale_secrets() {
-  log "[2/8] 기존 VSO-managed K8s Secret 점검"
+  log "[2/9] 기존 VSO-managed K8s Secret 점검"
   local stale_found=0 s
   for s in "${VSO_MANAGED_SECRETS[@]}"; do
     if kubectl -n "$NAMESPACE" get secret "$s" >/dev/null 2>&1; then
@@ -122,12 +130,63 @@ phase2_5_vso_crds() {
   # overlays/<env>/{database,keycloak,storage}/vault-secrets.yaml 에 VaultStaticSecret
   # CR 들이 포함돼 있어, Phase 3 overlay apply 시점에 CRD 가 없으면 "resource mapping
   # not found" 로 실패. Helm 차트 install 은 Phase 7 이므로 CRD 만 선행 적용.
-  log "[2.5/8] VSO CRD 선행 설치"
+  log "[2.5/9] VSO CRD 선행 설치"
   local version="${VSO_VERSION:-0.9.0}"
   helm repo add hashicorp https://helm.releases.hashicorp.com >/dev/null 2>&1 || true
   helm repo update hashicorp >/dev/null
   helm show crds hashicorp/vault-secrets-operator --version "$version" \
     | kubectl apply -f - --server-side --field-manager="$FIELD_MANAGER"
+}
+
+# cert-manager 전체 (CRD + namespace + controller + webhook) 을 overlay 밖에서
+# 선행 설치. 이후 phase 3 에서 overlay 가 참조하는 ClusterIssuer / Certificate CR
+# 이 등록될 수 있다. CRD established 대기를 반드시 건다 — deploy/webhook 가
+# Ready 되기 전에 Certificate CR apply 시 admission webhook 이 거부함.
+phase2_6_cert_manager() {
+  log "[2.6/9] cert-manager 선행 설치"
+  kubectl apply -k "$K8S_ROOT/overlays/$ENV_NAME/platform/cert-manager" \
+    --server-side --field-manager="$FIELD_MANAGER"
+
+  log "  cert-manager CRD established 대기"
+  retry 30 2 kubectl wait --for=condition=Established --timeout=10s \
+    crd/clusterissuers.cert-manager.io \
+    crd/certificates.cert-manager.io \
+    crd/certificaterequests.cert-manager.io \
+    crd/orders.acme.cert-manager.io \
+    crd/challenges.acme.cert-manager.io
+
+  log "  cert-manager Deployment Available 대기"
+  retry 30 5 kubectl -n cert-manager wait --for=condition=Available --timeout=10s \
+    deploy/cert-manager \
+    deploy/cert-manager-webhook \
+    deploy/cert-manager-cainjector
+}
+
+# Keycloak Operator (CRDs + Operator Deployment) 선행 설치. Keycloak /
+# KeycloakRealmImport CR 이 phase 3 에 포함되므로 CRD 등록이 먼저 되어야 한다.
+phase2_7_keycloak_operator() {
+  log "[2.7/9] Keycloak Operator 선행 설치"
+  kubectl apply -k "$K8S_ROOT/overlays/$ENV_NAME/platform/keycloak-operator" \
+    --server-side --field-manager="$FIELD_MANAGER"
+
+  log "  Keycloak Operator CRD established 대기"
+  retry 30 2 kubectl wait --for=condition=Established --timeout=10s \
+    crd/keycloaks.k8s.keycloak.org \
+    crd/keycloakrealmimports.k8s.keycloak.org
+
+  log "  Keycloak Operator Deployment Available 대기"
+  retry 60 5 kubectl -n "$NAMESPACE" wait --for=condition=Available --timeout=10s \
+    deploy/keycloak-operator
+}
+
+# kube-system Traefik 커스터마이징 — HelmChartConfig (K3s Helm-controller 가
+# 재수렴), Middleware (https-redirect / security-headers), TLSOption (modern-tls).
+# root overlay 가 `namespace: mnt` 로 전역 주입하므로 kube-system 타깃 리소스는
+# 이 overlay 빌드에 포함시키지 않고 별도 apply 한다.
+phase2_8_traefik() {
+  log "[2.8/9] Traefik HelmChartConfig + Middleware 적용 (kube-system)"
+  kubectl apply -k "$K8S_ROOT/overlays/$ENV_NAME/platform/traefik" \
+    --server-side --field-manager="$FIELD_MANAGER"
 }
 
 # render → server-side dry-run → diff → confirm → apply
@@ -138,7 +197,7 @@ phase2_5_vso_crds() {
 #   >1 — 실행 오류 (RBAC / API 연결 / invalid manifest 등)
 # 이전 구현은 `|| true` 로 모든 비-0 을 흡수해서 에러가 apply 까지 흘러갔다.
 phase3_overlay_apply() {
-  log "[3/8] 인프라 overlay 배포 ($OVERLAY_DIR)"
+  log "[3/9] 인프라 overlay 배포 ($OVERLAY_DIR)"
 
   local tmpdir
   tmpdir="$(mktemp -d -t project-infra-bootstrap.XXXXXX)"
@@ -193,30 +252,38 @@ phase3_overlay_apply() {
 phase4_wait_vault_running() {
   # Vault readiness probe 는 initialized+unsealed 일 때만 통과하므로 초기화 *전*
   # 에는 Ready 가 될 수 없음 → Running 단계까지만 기다림.
-  log "[4/8] vault-0 Running 대기 (120s × 재시도 3회)"
+  log "[4/9] vault-0 Running 대기 (120s × 재시도 3회)"
   retry 3 10 kubectl -n "$NAMESPACE" wait \
     --for=jsonpath='{.status.phase}'=Running pod/vault-0 --timeout=120s
 }
 
 phase5_vault_init() {
-  log "[5/8] Vault 초기화 / unseal / auth / policy / role"
+  log "[5/9] Vault 초기화 / unseal / auth / policy / role"
   ENV_NAME="$ENV_NAME" bash "$TASKS_DIR/vault-init.sh"
 }
 
 phase6_seed_apps() {
-  log "[6/8] 앱 시크릿 5 개 Vault KV 에 seed"
+  log "[6/9] 앱 시크릿 5 개 Vault KV 에 seed"
   ENV_NAME="$ENV_NAME" bash "$TASKS_DIR/vault-seed-apps.sh"
 }
 
 phase7_vso_install() {
-  log "[7/8] VSO Helm upgrade --install"
+  log "[7/9] VSO Helm upgrade --install"
   ENV_NAME="$ENV_NAME" bash "$TASKS_DIR/vso-install.sh"
 }
 
 phase8_vso_crs() {
-  log "[8/8] VSO CR 적용 ($OVERLAY_DIR/vso/)"
+  log "[8/9] VSO CR 적용 ($OVERLAY_DIR/vso/)"
   kubectl apply -k "$OVERLAY_DIR/vso/" \
     --server-side --field-manager="$FIELD_MANAGER"
+}
+
+# docker-registry 가 MinIO 를 S3 backend 로 쓰도록 bucket + 서비스 user +
+# bucket-scoped policy 를 설정. MinIO Tenant 는 phase 8 에서 minio-tenant-env
+# Secret 이 생긴 뒤 기동되므로 이 phase 는 반드시 phase 8 이후에 실행.
+phase9_minio_provision_registry() {
+  log "[9/9] MinIO docker-registry bucket/user/policy 프로비저닝"
+  ENV_NAME="$ENV_NAME" bash "$TASKS_DIR/minio-provision-registry.sh"
 }
 
 summary() {
@@ -260,12 +327,16 @@ main() {
   phase1_namespace
   phase2_reset_stale_secrets
   phase2_5_vso_crds
+  phase2_6_cert_manager
+  phase2_7_keycloak_operator
+  phase2_8_traefik
   phase3_overlay_apply
   phase4_wait_vault_running
   phase5_vault_init
   phase6_seed_apps
   phase7_vso_install
   phase8_vso_crs
+  phase9_minio_provision_registry
   summary
 }
 

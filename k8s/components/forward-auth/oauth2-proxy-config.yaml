@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oauth2-proxy-config
+  labels:
+    app.kubernetes.io/name: oauth2-proxy
+    app.kubernetes.io/instance: oauth2-proxy
+    app.kubernetes.io/version: "7.15.2"
+    app.kubernetes.io/component: auth-proxy
+    app.kubernetes.io/part-of: auth-platform
+    app.kubernetes.io/managed-by: kustomize
+data:
+  oauth2-proxy.cfg: |
+    provider = "keycloak-oidc"
+    http_address = "0.0.0.0:4180"
+    metrics_address = "0.0.0.0:44180"
+    redirect_url = "https://project.com/oauth2/callback"
+
+    oidc_issuer_url = "https://keycloak.dev.example.com/realms/platform"
+    skip_oidc_discovery = true
+    login_url = "https://keycloak.dev.example.com/realms/platform/protocol/openid-connect/auth"
+    redeem_url = "http://keycloak.mnt.svc.cluster.local/realms/platform/protocol/openid-connect/token"
+    profile_url = "http://keycloak.mnt.svc.cluster.local/realms/platform/protocol/openid-connect/userinfo"
+    validate_url = "http://keycloak.mnt.svc.cluster.local/realms/platform/protocol/openid-connect/userinfo"
+    oidc_jwks_url = "http://keycloak.mnt.svc.cluster.local/realms/platform/protocol/openid-connect/certs"
+
+    client_id = "auth-server-ingress"
+    client_secret_file = "/etc/oauth2-proxy-secrets/client-secret"
+    cookie_secret_file = "/etc/oauth2-proxy-secrets/cookie-secret"
+    reverse_proxy = true
+    upstreams = [ "static://202" ]
+    email_domains = [ "*" ]
+    scope = "openid profile email"
+    skip_provider_button = true
+    cookie_secure = true
+    cookie_samesite = "lax"
+    cookie_csrf_per_request = true
+    set_xauthrequest = true
+    pass_access_token = true
+    pass_authorization_header = true
+    ssl_insecure_skip_verify = false
+    whitelist_domains = [ "project.com" ]
+    trusted_proxy_ips = [ "10.42.0.0/16" ]

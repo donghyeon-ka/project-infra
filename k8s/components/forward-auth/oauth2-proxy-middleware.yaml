@@ -1,0 +1,23 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: oauth2-proxy-auth
+  labels:
+    app.kubernetes.io/name: oauth2-proxy
+    app.kubernetes.io/instance: oauth2-proxy
+    app.kubernetes.io/version: "7.15.2"
+    app.kubernetes.io/component: auth-proxy
+    app.kubernetes.io/part-of: auth-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  forwardAuth:
+    address: http://oauth2-proxy.mnt.svc.cluster.local:4180/
+    trustForwardHeader: true
+    authResponseHeaders:
+      - Authorization
+      - X-Auth-Request-Access-Token
+      - X-Auth-Request-Email
+      - X-Auth-Request-Preferred-Username
+      - X-Auth-Request-User
+      - X-Forwarded-Email
+      - X-Forwarded-User

@@ -2,6 +2,8 @@
 
 Kubernetes 기반 인프라 프로젝트. 클러스터 내 Private Docker Registry와 HashiCorp Vault를 운영하고, Vault Secrets Operator(VSO)로 시크릿을 자동 동기화하며, `auth-server` / `keycloak` / `identity-postgres` / `minio` / `test-server` / `migration-flyway` 워크로드까지 Kustomize 단일 namespace(`mnt`) 체계에서 함께 관리한다.
 
+dev 환경에서는 K3s 기본 packaged Traefik 을 유지하되, 직접 manifest 를 수정하지 않고 별도 `HelmChartConfig` overlay 로 운영 설정을 Git 에서 관리한다. 애플리케이션 쪽에서는 `auth-server` 와 `keycloak` 에 south-north Ingress 를 두고, 해당 트래픽만 NetworkPolicy 로 명시적으로 허용한다.
+
 > 실제 배포·운영 절차는 [guide.md](guide.md) 참조.
 
 ---
@@ -12,44 +14,54 @@ Kubernetes 기반 인프라 프로젝트. 클러스터 내 Private Docker Regist
 2. [폴더 구조](#폴더-구조)
 3. [네임스페이스 전략](#네임스페이스-전략)
 4. [NetworkPolicy 전략](#networkpolicy-전략)
-5. [이미지 정책](#이미지-정책)
-6. [Vault](#vault)
-7. [Vault Secrets Operator (VSO)](#vault-secrets-operator-vso)
-8. [Docker Registry](#docker-registry)
-9. [워크로드 목록](#워크로드-목록)
-10. [스크립트 구조](#스크립트-구조)
-11. [검증](#검증)
-12. [환경별 배포](#환경별-배포)
+5. [Ingress / Traefik 전략](#ingress--traefik-전략)
+6. [이미지 정책](#이미지-정책)
+7. [Vault](#vault)
+8. [Vault Secrets Operator (VSO)](#vault-secrets-operator-vso)
+9. [Docker Registry](#docker-registry)
+10. [워크로드 목록](#워크로드-목록)
+11. [스크립트 구조](#스크립트-구조)
+12. [검증](#검증)
+13. [환경별 배포](#환경별-배포)
 
 ---
 
 ## 아키텍처
 
 ```
-┌─────────────────────────── namespace: mnt ───────────────────────────┐
-│                                                                      │
-│   [ Vault (StatefulSet) ] ← VSO (Helm-installed Operator)            │
-│           │                      │                                   │
-│           │ TokenReview          │ reads KV-v2                       │
-│           ▼                      ▼                                   │
-│   ClusterRoleBinding       VaultStaticSecret (CRD)                   │
-│   system:auth-delegator     → K8s Secret                             │
-│                                │                                     │
-│                                ▼                                     │
-│   ┌──────────────────────────────────────────────────────────┐       │
-│   │ 워크로드                                                  │       │
-│   │  · auth-server      (Deployment)                         │       │
-│   │  · keycloak         (Deployment)                         │       │
-│   │  · identity-postgres(StatefulSet)                        │       │
-│   │  · migration-flyway (Job, ArgoCD PreSync sync-wave=-1)   │       │
-│   │  · minio            (Tenant CRD — MinIO Operator)        │       │
-│   │  · test-server-1/2/3(Deployment)                         │       │
-│   │  · docker-registry  (StatefulSet, htpasswd auth)         │       │
-│   └──────────────────────────────────────────────────────────┘       │
-│                                                                      │
-│   NetworkPolicy: default-deny + DNS egress baseline                  │
-│                + 컴포넌트별 ingress/egress allow                      │
-└──────────────────────────────────────────────────────────────────────┘
+┌────────────────────────── namespace: kube-system ──────────────────────────┐
+│                                                                            │
+│   [ K3s packaged Traefik ]                                                 │
+│     · HelmChartConfig overlay 로 운영 설정 override                         │
+│     · Middleware / TLSOption 공용 정책 관리                               │
+│     · ServiceLB(svclb-traefik) 를 통해 north-south 진입                    │
+└────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌──────────────────────────── namespace: mnt ────────────────────────────────┐
+│                                                                            │
+│   [ Vault (StatefulSet) ] ← VSO (Helm-installed Operator)                  │
+│           │                      │                                         │
+│           │ TokenReview          │ reads KV-v2                             │
+│           ▼                      ▼                                         │
+│   ClusterRoleBinding       VaultStaticSecret (CRD)                         │
+│   system:auth-delegator     → K8s Secret                                   │
+│                                │                                           │
+│                                ▼                                           │
+│   ┌──────────────────────────────────────────────────────────────┐         │
+│   │ 워크로드                                                      │         │
+│   │  · auth-server      (Deployment, host=project.com)           │         │
+│   │  · keycloak         (Keycloak CR, host=keycloak.dev.example.com)│      │
+│   │  · identity-postgres(StatefulSet)                            │         │
+│   │  · migration-flyway (Job, ArgoCD PreSync sync-wave=-1)       │         │
+│   │  · minio            (Tenant CRD — MinIO Operator)            │         │
+│   │  · test-server-1/2/3(Deployment)                             │         │
+│   │  · docker-registry  (Deployment, host=registry.project.com)  │         │
+│   └──────────────────────────────────────────────────────────────┘         │
+│                                                                            │
+│   NetworkPolicy: default-deny + DNS egress baseline                        │
+│                + Traefik ingress allow + 컴포넌트별 east-west allow         │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
 시크릿 흐름:
@@ -58,7 +70,7 @@ Kubernetes 기반 인프라 프로젝트. 클러스터 내 Private Docker Regist
 Vault KV (secret/…)
    ↓  VSO 가 refreshAfter 주기로 동기화
 K8s Secret (mnt namespace)
-   ↓  워크로드가 envFrom / volume / imagePullSecrets 로 참조
+   ↓  워크로드가 envFrom / volume 으로 참조
 애플리케이션 Pod
 ```
 
@@ -87,13 +99,13 @@ Project-Infra/
 │   │   │   │   ├── auth/
 │   │   │   │   │   ├── stateful/identity-postgres/
 │   │   │   │   │   └── stateless/auth-server/        # example 이미지
-│   │   │   │   └── keycloak/stateless/keycloak/
 │   │   │   ├── storage/minio/stateful/minio/
 │   │   │   └── test/stateless/test-server-{1,2,3}/   # example 이미지
 │   │   │
 │   │   └── plugins/                            # 플랫폼 플러그인 (다른 워크로드가 의존)
 │   │       ├── vault/                          # Vault StatefulSet (공식 이미지)
-│   │       ├── docker-registry/                # Registry StatefulSet (공식 이미지)
+│   │       ├── docker-registry/                # Registry Deployment (공식 이미지)
+│   │       ├── oauth2-proxy/                   # Traefik ForwardAuth 용 auth proxy (선택 적용)
 │   │       └── vso/
 │   │           ├── kustomization.yaml          # VaultConnection / VaultAuth / VaultStaticSecret
 │   │           ├── vault-connection.yaml
@@ -103,18 +115,29 @@ Project-Infra/
 │   │           ├── vault-static-secret-pull-cred.yaml
 │   │           └── helm/values.yaml            # VSO Operator 설치용 Helm values
 │   │
+│   ├── components/
+│   │   └── forward-auth/                       # oauth2-proxy + Traefik ForwardAuth 재사용 component
+│   │
 │   ├── overlays/
 │   │   └── dev/
 │   │       ├── kustomization.yaml              # dev 전체 집계 (namespace: mnt)
 │   │       ├── networkpolicy-baseline.yaml     # default-deny + DNS egress
+│   │       ├── platform/
+│   │       │   ├── traefik/                    # kube-system 전용 overlay (HelmChartConfig + Middleware + TLSOption)
+│   │       │   ├── cert-manager/               # cert-manager v1.20.2 install overlay
+│   │       │   ├── cert-manager-issuers/       # letsencrypt-staging/prod ClusterIssuer overlay
+│   │       │   └── keycloak-operator/          # Keycloak Operator 26.6.1 CRD/Controller overlay
+│   │       ├── tls/                            # cert-manager 설치 후 적용할 Certificate overlay
 │   │       ├── vault/                          # Vault overlay + NetworkPolicy + storage patch
 │   │       ├── registry/                       # Registry overlay + NetworkPolicy + storage patch
 │   │       ├── vso/                            # VSO CRDs (Helm 설치 후 별도 apply)
 │   │       ├── database/                       # identity-postgres + VaultStaticSecret + NetworkPolicy
-│   │       ├── auth/                           # auth-server + flyway + PreSync sync-wave=-1 + NetworkPolicy
-│   │       ├── keycloak/                       # keycloak + VaultStaticSecret + hostname patch + NetworkPolicy
+│   │       ├── auth/                           # auth-server + flyway + Ingress(project.com) + NetworkPolicy
+│   │       ├── keycloak/                       # Keycloak CR + public Ingress + NetworkPolicy
+│   │       ├── keycloak-realm/                 # KeycloakRealmImport 기반 realm/client Git 관리
 │   │       ├── storage/                        # minio + VaultStaticSecret + certConfig FQDN patch + NetworkPolicy
 │   │       └── test/                           # test-server 1/2/3 + NetworkPolicy
+│   │   dev-with-forward-auth/                  # dev + components/forward-auth variant overlay
 │   │   staging/                                # 의도적으로 비어둠 (추후 확장)
 │   │   prod/                                   # 의도적으로 비어둠 (추후 확장)
 │   │
@@ -129,7 +152,7 @@ Project-Infra/
 │       │   └── vault.sh                        # vault_exec / is_initialized / is_sealed / ...
 │       └── tasks/                              # 재사용 가능한 작업 단위
 │           ├── vault-init.sh                   # Vault init + unseal + auth + KV + policy/role
-│           ├── vault-seed-registry.sh          # htpasswd 생성 → Vault KV 저장
+│           ├── vault-seed-apps.sh              # 앱/MinIO/registry 관련 Vault KV 저장
 │           └── vso-install.sh                  # helm upgrade --install (idempotent)
 │
 └── terraform/                                  # (현재 contracts 만, 추후 구현)
@@ -156,14 +179,128 @@ Project-Infra/
 |---|---|
 | `overlays/dev/networkpolicy-baseline.yaml` | `default-deny-all` (전 Pod ingress/egress 기본 차단) + `allow-dns-egress` (kube-system/kube-dns 53) |
 | `overlays/dev/database/networkpolicy.yaml` | identity-postgres ingress ← keycloak / auth-server / migration-flyway (5432) |
-| `overlays/dev/auth/networkpolicy.yaml` | auth-server egress → postgres(5432) + keycloak(8080); flyway egress → postgres(5432) |
-| `overlays/dev/keycloak/networkpolicy.yaml` | keycloak egress → postgres(5432); ingress ← auth-server(8080) |
+| `overlays/dev/auth/networkpolicy.yaml` | auth-server ingress ← `kube-system/traefik`(8080); egress → postgres(5432) + keycloak(8080); flyway egress → postgres(5432) |
+| `overlays/dev/keycloak/networkpolicy.yaml` | keycloak ingress ← `kube-system/traefik`(8080) + auth-server(8080); egress → postgres(5432); Keycloak Pod 간 peer 통신 |
 | `overlays/dev/storage/networkpolicy.yaml` | minio ingress ← `part-of=auth-platform`(9000); 자체 peer(9000/9001) |
 | `overlays/dev/test/networkpolicy.yaml` | test-server 3대 내부 상호 통신만 허용 |
 | `overlays/dev/vault/networkpolicy.yaml` | vault ingress ← VSO Operator Pod(8200) |
-| `overlays/dev/registry/networkpolicy.yaml` | docker-registry ingress ← namespace 내 전 Pod(5000) |
+| `overlays/dev/registry/networkpolicy.yaml` | docker-registry ingress ← namespace 내 전 Pod(5000) + `kube-system/traefik`(5000); egress → minio(9000) |
 
 cross-namespace 참조가 필요한 항목은 `namespaceSelector` + `podSelector` 를 한 블록에 조합해 AND 시맨틱으로 작성한다.
+
+---
+
+## Ingress / Traefik 전략
+
+dev 환경에서는 K3s 기본 packaged Traefik 을 그대로 유지하되, **`/var/lib/rancher/k3s/server/manifests/traefik.yaml` 는 수정하지 않는다.** 운영 설정은 `k8s/overlays/dev/platform/traefik/` 의 `HelmChartConfig` 로만 오버라이드한다.
+
+### 현재 구성
+
+| 위치 | 역할 |
+|---|---|
+| `k8s/overlays/dev/platform/traefik/helmchartconfig.yaml` | Traefik replica, 기본 ingressClass, HTTP→HTTPS redirect, metrics, 기본 TLS option 연결 |
+| `k8s/overlays/dev/platform/traefik/middleware.yaml` | 공용 `security-headers` Middleware + `modern-tls` TLSOption |
+| `k8s/overlays/dev/auth/ingress.yaml` | `project.com` → `auth-server` |
+| `k8s/overlays/dev/keycloak/ingress-public.yaml` | `keycloak.dev.example.com` → Keycloak 공개 path(`/realms/`, `/resources/`, `/.well-known/`, `/js/`) |
+| `k8s/overlays/dev/platform/cert-manager/` | cert-manager `v1.20.2` CRD/controller 설치 |
+| `k8s/overlays/dev/platform/cert-manager-issuers/` | `letsencrypt-staging` / `letsencrypt-prod` ClusterIssuer |
+| `k8s/overlays/dev/platform/keycloak-operator/` | Keycloak Operator `26.6.1` CRD + controller. dev 제약상 `mnt` 에 설치해 `mnt` 의 Keycloak CR 을 watch. Kubernetes API egress NetworkPolicy 포함 |
+| `k8s/overlays/dev/tls/*.yaml` | cert-manager 설치 후 사용할 `Certificate` 리소스 |
+| `k8s/components/forward-auth/` | oauth2-proxy + Traefik ForwardAuth 재사용 component |
+| `k8s/overlays/dev-with-forward-auth/` | 기본 dev 에 forward-auth component 를 결합한 선택형 overlay |
+| `k8s/overlays/dev/keycloak-realm/` | Keycloak Operator `KeycloakRealmImport` 로 realm/client 를 Git 관리하는 overlay |
+
+### 설계 원칙
+
+- app 쪽은 `Ingress` 만 선언하고, 공통 보안 정책은 Traefik 공용 middleware / TLSOption 으로 재사용한다.
+- north-south ingress 는 `kube-system` 의 `traefik` Pod 에서만 시작되므로, app NetworkPolicy 도 실제 클러스터 기준으로 `kube-system` 을 허용한다.
+- Keycloak 은 외부 전체 공개가 아니라 **최소 공개 path** 만 연다. `/admin`, `/metrics`, `/health` 는 계속 비공개다.
+- TLS 리소스는 `cert-manager` 와 `ClusterIssuer` 적용 후 `k8s/overlays/dev/tls/` 로 발급한다.
+
+### 현재 적용 범위와 남은 과제
+
+현재 repo 는 다음까지 커버한다.
+
+- Traefik 운영 정책의 Git 관리
+- app ingress host / path / policy 정의
+- Traefik → app 방향 ingress allow NetworkPolicy
+- TLS `Certificate` 선언 준비
+
+아직 남아 있는 것은 다음이다.
+
+- `cert-manager` 설치 + `ClusterIssuer` 준비 (`k8s/overlays/dev/platform/cert-manager/`, `k8s/overlays/dev/platform/cert-manager-issuers/`)
+- 외부 DNS 가 `project.com`, `keycloak.dev.example.com` 을 실제 Traefik 진입점으로 향하게 하는 작업
+- 최종 목표인 **Ingress 단 인증 차단**. 이를 위해 repo 에는 `k8s/components/forward-auth/` 와 `k8s/overlays/dev-with-forward-auth/` 가 추가되어 있으며, 구조는 `Traefik ForwardAuth → oauth2-proxy → Keycloak` 이다.
+- Keycloak realm/client 의 실제 operator 기반 적용. 먼저 `k8s/overlays/dev/platform/keycloak-operator/` 를 적용하고, 그 뒤 `k8s/overlays/dev/keycloak-realm/` 를 적용한다.
+
+### ForwardAuth component / variant
+
+`k8s/components/forward-auth/` 는 oauth2-proxy 와 ForwardAuth middleware 를 담은 Kustomize component 다. `k8s/overlays/dev-with-forward-auth/` 는 기본 `dev` 전체를 포함한 뒤 이 component 를 결합하는 얇은 variant overlay 다.
+
+- `oauth2-proxy` Deployment / Service / ConfigMap / VaultStaticSecret
+- `project.com/oauth2/*` 경로용 Ingress
+- `oauth2-proxy-auth` Traefik Middleware
+- `auth-server` Ingress patch
+  `project.com/` 요청은 oauth2-proxy 를 거쳐 인증된 사용자만 통과
+
+적용 전제:
+
+- `k8s/overlays/dev/keycloak-realm/` 또는 동등한 방법으로 `platform` realm + `auth-server-ingress` client 가 준비됨
+- redirect URI: `https://project.com/oauth2/callback`
+- Vault path `secret/oauth2-proxy/forward-auth` 에 `client-secret`, `cookie-secret` 저장
+- `project.com` 과 `keycloak.dev.example.com` 이 실제 Traefik 진입점으로 해석
+
+현재 dev variant 의 oauth2-proxy 설정은 `ssl_insecure_skip_verify=true` 를 사용한다. 이유는 아직 cert-manager 가 없어서 Keycloak 공개 호스트 인증서 체인이 완성되지 않았기 때문이다. cert-manager 도입 후에는 이 값을 제거하는 것이 목표다.
+
+### cert-manager / ClusterIssuer 운영 원칙
+
+repo 에 `k8s/overlays/dev/platform/cert-manager/` 와 `k8s/overlays/dev/platform/cert-manager-issuers/` 가 추가되었다. 설치 overlay 는 공식 static install `v1.20.2` 를 관리하고, issuer overlay 는 ACME HTTP-01 용 `letsencrypt-staging` / `letsencrypt-prod` `ClusterIssuer` 를 관리한다.
+
+source-of-truth 관점에서 cert-manager 도 이 repo 의 선언형 관리 대상이다. 단, 실제 인증서 발급은 DNS 가 Traefik 외부 진입점으로 연결되고 80/443 이 도달 가능해야 완료된다.
+
+정리하면:
+
+- 설치: `kubectl apply -k k8s/overlays/dev/platform/cert-manager`
+- issuer: `kubectl apply -k k8s/overlays/dev/platform/cert-manager-issuers`
+- 인증서: `kubectl apply -k k8s/overlays/dev/tls`
+- 운영 보정: `admin@project.com` 은 실제 운영 수신 가능한 메일로 교체 필요
+
+### Keycloak realm / client Git 관리
+
+repo 에는 `k8s/overlays/dev/keycloak-realm/` 가 추가되었다. 이 overlay 는 `KeycloakRealmImport` 로 `platform` realm 과 `auth-server-ingress` client 를 선언한다.
+
+이제 `k8s/overlays/dev/keycloak/` 도 수제 `Deployment` 가 아니라 `Keycloak` CR 기반으로 전환되었다. `KeycloakRealmImport` 는 같은 `mnt` namespace 의 `Keycloak/keycloak` 을 대상으로 동작한다. `mnt` default-deny 정책 때문에 Keycloak Operator 의 Kubernetes API egress 와 Keycloak Pod 간 Infinispan/JGroups peer 통신도 NetworkPolicy 로 명시한다.
+
+적용 순서는:
+
+1. `kubectl apply -k k8s/overlays/dev/platform/keycloak-operator`
+2. 기존 수제 `Deployment/Service/ConfigMap/ServiceAccount keycloak*` 정리
+3. `kubectl apply -k k8s/overlays/dev`
+4. `kubectl apply -k k8s/overlays/dev/keycloak-realm`
+
+### 완료 판정
+
+현재 상태를 두고 `dev 운영 환경이 완전히 끝났다`고 보지는 않는다.
+
+repo 관점에서 완료된 것:
+
+- Kustomize source of truth 정리
+- south-north ingress 경로 정의
+- Traefik 운영 설정의 Git 관리
+- ForwardAuth variant 준비
+- 관련 문서화
+
+아직 운영 완료로 보기 어려운 것:
+
+- `cert-manager` 와 실제 `ClusterIssuer`
+- Keycloak Operator / Keycloak CR / RealmImport 실제 적용
+- 실제 DNS 연결
+- Keycloak realm/client 적용 및 oauth2-proxy secret seed
+- end-to-end 로그인 테스트
+- deny/allow negative test
+- `ssl_insecure_skip_verify=true` 제거
+
+즉, 지금은 **구성 초안과 적용 가능한 manifest 는 준비된 상태**이고, 실사용 dev 운영 완성은 외부 의존성과 검증까지 끝나야 한다.
 
 ---
 
@@ -174,7 +311,7 @@ cross-namespace 참조가 필요한 항목은 `namespaceSelector` + `podSelector
 | **공식 upstream** | `hashicorp/vault:1.17.2` | HashiCorp 공식 Docker Hub |
 | | `registry:2.8.3` | Docker library 공식 |
 | | `postgres:16.4` | PostgreSQL 공식 |
-| | `quay.io/keycloak/keycloak:26.0.7` | Keycloak 공식 quay.io (args: `[start]`) |
+| | `quay.io/keycloak/keycloak:26.6.1` | Keycloak Operator 26.6.1 이 관리하는 Keycloak 이미지 |
 | | `minio/minio:RELEASE.2025-01-20T14-49-07Z` | MinIO 공식 |
 | | `flyway/flyway:10.20.1` | Flyway 공식 |
 | **example (사용자 개발)** | `registry.example.com/auth-platform/auth-server:0.1.0` | 조직 개발 서비스 |
@@ -293,29 +430,40 @@ Docker 공식 config 스키마는 `.auth = base64("<username>:<password>")` 형�
 | 항목 | 값 |
 |---|---|
 | 이미지 | `registry:2.8.3` (Docker library 공식) |
-| 배포 | StatefulSet (replicas 1, volumeClaimTemplate) |
-| 서비스 | `docker-registry.mnt.svc.cluster.local:5000` |
-| 인증 | **없음** (NetworkPolicy 로만 보호, 내부 전용) |
-| 저장 | PVC 10Gi (dev overlay에서 5Gi로 patch) |
+| 배포 | Deployment (replicas 1) |
+| 내부 서비스 | `docker-registry.mnt.svc.cluster.local:5000` |
+| 외부 Ingress | `registry.project.com` (`/v2` only) |
+| 인증 | 내부 Service 는 무인증, 외부 Ingress 와 kubelet pull 은 registry credential 사용 |
+| 저장 | MinIO S3 bucket `docker-registry` |
 
-### 왜 auth 를 제거했나
+### 인증 경계
 
-Registry 는 `mnt` namespace 내부 전용이며 `overlays/dev/registry/networkpolicy.yaml` 이 같은 namespace Pod 만 ingress 를 허용한다. 외부 노출 없음. 단일 운영자 환경에서 push/pull 계정 분리는 과잉 설계라 판단하여 htpasswd / Vault KV (`secret/docker-registry/*`) / bcrypt 생성 Pod / imagePullSecrets 체인을 전부 제거. 이후 멀티테넌트 / 외부 노출 단계에서 auth 재도입 가능.
+운영자 push 와 kubelet image pull 은 `registry.project.com` 을 기준으로 한다. Traefik `Middleware/docker-registry-basic-auth` 는 Vault/VSO 로 생성된 `docker-registry-basic-auth` Secret 의 htpasswd `users` 값을 검증하고, 앱 ServiceAccount 는 `docker-registry-pull-credentials` imagePullSecret 으로 같은 registry credential 을 사용한다.
+
+Registry 자체 auth 는 켜지지 않는다. 인증 경계는 Traefik 외부 Ingress 와 kubelet pull credential 에 둔다. 따라서 `docker-registry-ingress-traefik` NetworkPolicy, BasicAuth Secret, imagePullSecret 이 함께 있어야 push/pull 경로가 안전하다.
 
 ### Push / Pull
 
 ```bash
-# auth 없이 바로 push (내부 네트워크에서만 가능)
+# 외부 운영자 push
+docker login registry.project.com
+docker tag my-app:v1 registry.project.com/my-app:v1
+docker push registry.project.com/my-app:v1
+```
+
+```bash
+# 클러스터 내부 Pod 간 HTTP 확인 등 내부 Service 접근이 필요할 때
 docker tag my-app:v1 docker-registry.mnt.svc.cluster.local:5000/my-app:v1
 docker push docker-registry.mnt.svc.cluster.local:5000/my-app:v1
 ```
 
 ```yaml
 spec:
-  # imagePullSecrets 불필요
+  serviceAccountName: auth-server-sa
+  # auth-server-sa 에 docker-registry-pull-credentials 연결
   containers:
     - name: my-app
-      image: docker-registry.mnt.svc.cluster.local:5000/my-app:v1
+      image: registry.project.com/my-app:v1
 ```
 
 ---
@@ -326,7 +474,7 @@ spec:
 |---|---|---|---|
 | `identity-postgres` | StatefulSet | `base/app/identity/auth/stateful/` | `identity-postgres-superuser`, `keycloak-db`, `auth-server-db` |
 | `auth-server` | Deployment | `base/app/identity/auth/stateless/` | `auth-server-db` |
-| `keycloak` | Deployment | `base/app/identity/keycloak/stateless/` | `keycloak-db`, `keycloak-bootstrap-admin` |
+| `keycloak` | Keycloak CR / StatefulSet(Operator 생성) | `overlays/dev/keycloak/` | `keycloak-db-operator`, `keycloak-bootstrap-admin-operator` |
 | `minio` | Tenant CRD | `base/app/storage/minio/stateful/` | `minio-tenant-env` |
 | `test-server-1/2/3` | Deployment | `base/app/test/stateless/` | — |
 | `migration-flyway` | Job | `base/managing/migration-flyway/` | `auth-server-db` (FLYWAY_USER/PASSWORD) |
@@ -363,9 +511,9 @@ base 는 짧은 이름(`minio`, `minio-hl`) 만 두고, dev overlay 가 `minio.m
 | `bin/` | 사용자 진입점. `bootstrap.sh` / `teardown.sh` |
 | `ci/` | CI / 로컬 검증. `validate.sh` (kustomize + kubeconform + kube-linter) |
 | `lib/` | 공통 Bash 라이브러리. `common.sh` (strict mode / trap / log / confirm / retry / mask_secret) + `vault.sh` (Vault 헬퍼) |
-| `tasks/` | 재사용 가능한 작업 단위. `vault-init.sh` / `vault-seed-registry.sh` / `vso-install.sh` |
+| `tasks/` | 재사용 가능한 작업 단위. `vault-init.sh` / `vault-seed-apps.sh` / `vso-install.sh` |
 
-모든 쉘 스크립트는 `set -Eeuo pipefail` + `IFS=$'\n\t'` + `trap_cleanup` 으로 공통 에러 처리. root token / htpasswd 같은 민감 값은 **stdin 파이프** 로만 전달하고 stdout 에 찍지 않는다.
+모든 쉘 스크립트는 `set -Eeuo pipefail` + `IFS=$'\n\t'` + `trap_cleanup` 으로 공통 에러 처리. root token / registry BasicAuth 값 같은 민감 값은 **stdin 파이프** 로만 전달하고 stdout 에 찍지 않는다.
 
 ---
 

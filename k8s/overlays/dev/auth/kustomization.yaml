@@ -6,9 +6,30 @@ namespace: mnt
 resources:
   - ../../../base/app/identity/auth/stateless/auth-server
   - ../../../base/managing/migration-flyway
+  - ingress.yaml
   - networkpolicy.yaml
 
+images:
+  - name: registry.example.com/auth-platform/auth-server
+    newName: registry.project.com/auth-platform/auth-server
+    newTag: 0.1.0
+
 patches:
+  - target:
+      kind: ConfigMap
+      name: auth-server-config
+    patch: |-
+      - op: add
+        path: /data/APP_SECURITY_KEYCLOAK_ISSUER_URI
+        value: http://keycloak/realms/platform
+  - target:
+      kind: ServiceAccount
+      name: auth-server-sa
+    patch: |-
+      - op: add
+        path: /imagePullSecrets
+        value:
+          - name: docker-registry-pull-credentials
   - target:
       kind: Job
       name: migration-flyway

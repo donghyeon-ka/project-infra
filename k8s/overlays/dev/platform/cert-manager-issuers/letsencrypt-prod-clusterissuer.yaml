@@ -1,0 +1,24 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/instance: cert-manager
+    app.kubernetes.io/component: certificate-management
+    app.kubernetes.io/part-of: platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  acme:
+    email: admin@project.com
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik
+        selector:
+          dnsZones:
+            - project.com
+            - dev.example.com

@@ -6,16 +6,11 @@ namespace: mnt
 resources:
   - ../../../base/app/identity/keycloak/stateless/keycloak
   - vault-secrets.yaml
+  - ingress-public.yaml
   - networkpolicy.yaml
 
 patches:
   - target:
-      kind: ConfigMap
-      name: keycloak-config
-    patch: |-
-      - op: add
-        path: /data/KC_HOSTNAME
-        value: https://keycloak.dev.example.com
-      - op: add
-        path: /data/KC_HOSTNAME_ADMIN
-        value: https://keycloak-admin.dev.example.com
+      kind: Keycloak
+      name: keycloak
+    path: keycloak-hostname-patch.yaml

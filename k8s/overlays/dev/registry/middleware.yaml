@@ -1,0 +1,14 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: docker-registry-basic-auth
+  labels:
+    app.kubernetes.io/name: docker-registry
+    app.kubernetes.io/instance: docker-registry
+    app.kubernetes.io/component: registry
+    app.kubernetes.io/part-of: platform-registry
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  basicAuth:
+    secret: docker-registry-basic-auth
+    realm: docker-registry

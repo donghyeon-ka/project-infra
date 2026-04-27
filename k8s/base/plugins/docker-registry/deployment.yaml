@@ -1,16 +1,16 @@
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: docker-registry
 spec:
   replicas: 1
-  serviceName: docker-registry-headless
-  podManagementPolicy: OrderedReady
-  updateStrategy:
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 600
+  strategy:
     type: RollingUpdate
-  persistentVolumeClaimRetentionPolicy:
-    whenDeleted: Retain
-    whenScaled: Retain
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: docker-registry
@@ -43,6 +43,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: docker-registry-config
+            - secretRef:
+                name: docker-registry-minio
           resources:
             requests:
               cpu: 100m
@@ -83,8 +85,6 @@ spec:
             seccompProfile:
               type: RuntimeDefault
           volumeMounts:
-            - name: data
-              mountPath: /var/lib/registry
             - name: tmp
               mountPath: /tmp
       volumes:
@@ -92,14 +92,3 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 64Mi
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        storageClassName: local-path
-        volumeMode: Filesystem
-        resources:
-          requests:
-            storage: 10Gi

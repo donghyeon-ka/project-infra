@@ -10,15 +10,71 @@ metadata:
     app.kubernetes.io/part-of: auth-platform
     app.kubernetes.io/managed-by: kustomize
 data:
-  V1__init_auth_server_schema.sql: |
-    CREATE SCHEMA IF NOT EXISTS auth_server;
+  V1__create_users_table.sql: |
+    create schema if not exists auth;
 
-    CREATE TABLE IF NOT EXISTS auth_server.users (
-        id           bigserial PRIMARY KEY,
-        email        text NOT NULL,
-        display_name text,
-        created_at   timestamptz NOT NULL DEFAULT now()
+    create or replace function auth.set_updated_at()
+    returns trigger as $$
+    begin
+        new.updated_at := current_timestamp;
+        return new;
+    end;
+    $$ language plpgsql;
+
+    create table auth.users (
+        id uuid not null,
+        email text not null,
+        encoded_password text not null,
+        name text not null,
+        provider text not null,
+        created_at timestamp with time zone not null default current_timestamp,
+        updated_at timestamp with time zone not null default current_timestamp,
+        constraint pk_users primary key (id),
+        constraint uq_users__email unique (email),
+        constraint ck_users__provider check (provider in ('LOCAL', 'GOOGLE', 'GITHUB'))
     );
 
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_server_users_email
-        ON auth_server.users (lower(email));
+    create index ix_users__created_at on auth.users (created_at);
+
+    create trigger trg_users__set_updated_at
+    before update on auth.users
+    for each row
+    when (old.* is distinct from new.*)
+    execute function auth.set_updated_at();
+  V2__add_oauth_login_columns.sql: |
+    alter table auth.users alter column encoded_password drop not null;
+
+    alter table auth.users add column provider_subject text;
+
+    alter table auth.users
+        add constraint uq_users__provider_provider_subject unique (provider, provider_subject);
+  V3__add_user_provider_field_constraints.sql: |
+    alter table auth.users
+        add constraint ck_users__local_password_required
+            check (
+                (provider = 'LOCAL' and encoded_password is not null and provider_subject is null)
+                or (provider <> 'LOCAL')
+            );
+
+    alter table auth.users
+        add constraint ck_users__social_subject_required
+            check (
+                (provider <> 'LOCAL' and provider_subject is not null and encoded_password is null)
+                or (provider = 'LOCAL')
+            );
+  V4__add_keycloak_provider.sql: |
+    alter table auth.users drop constraint ck_users__provider;
+
+    alter table auth.users
+        add constraint ck_users__provider check (provider in ('LOCAL', 'KEYCLOAK', 'GOOGLE', 'GITHUB'));
+  V5__keycloak_only_provider.sql: |
+    alter table auth.users drop constraint if exists ck_users__local_password_required;
+    alter table auth.users drop constraint if exists ck_users__social_subject_required;
+    alter table auth.users drop constraint if exists ck_users__provider;
+
+    alter table auth.users drop column if exists encoded_password;
+
+    alter table auth.users alter column provider_subject set not null;
+
+    alter table auth.users
+        add constraint ck_users__provider check (provider = 'KEYCLOAK');

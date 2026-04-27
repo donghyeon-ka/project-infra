@@ -65,6 +65,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: auth-server-config
+            - secretRef:
+                name: auth-server-db
           env:
             - name: JAVA_TOOL_OPTIONS
               value: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"

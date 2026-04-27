@@ -19,6 +19,9 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/part-of: auth-platform
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: platform-registry
       ports:
         - protocol: TCP
           port: 9000
