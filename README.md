@@ -58,7 +58,7 @@ VSO Operator 의 ServiceAccount(`vault-secrets-operator`) 는 한 개다. 그러
 
 ### 3. PSS Restricted 를 깨지 않기 위해 Vault 에서 `disable_mlock=true` 를 받아들였다
 
-Vault 권장은 mlock 활성화지만, 그러려면 컨테이너에 `IPC_LOCK` capability 를 줘야 하고 PSS Restricted 와 충돌한다. **클러스터 전체 보안 baseline 을 깎느니 단일 컴포넌트에서 트레이드오프를 받는다** — 대신 swap off 노드에서만 운영하기로 못박았다. prod 승격 시 storage `file` → `raft` + KMS auto-unseal 로 같이 바뀐다.
+Vault 권장은 mlock 활성화지만, 그러려면 컨테이너에 `IPC_LOCK` capability 를 줘야 하고 PSS Restricted 와 충돌한다. **클러스터 전체 보안 baseline 을 깎느니 단일 컴포넌트에서 트레이드오프를 받는다** — 대신 swap off 노드에서만 운영하기로 했다. prod 승격 시 storage `file` → `raft` + KMS auto-unseal 로 같이 바뀐다.
 
 → [docs/vault-vso.md](docs/vault-vso.md#설계-결정)
 
