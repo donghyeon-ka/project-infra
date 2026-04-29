@@ -30,7 +30,7 @@ Kubernetes(K3s) 기반 백엔드 운영 환경을 **Git 단일 source-of-truth**
 
 ![System Overview](docs/diagrams/architecture/01-overall.png)
 
-> 그림 원본은 [`docs/diagrams/architecture/overall.drawio`](docs/diagrams/architecture/overall.drawio) (draw.io). 컴포넌트별 상세는 [docs/architecture.md](docs/architecture.md).
+> 컴포넌트별 상세는 [docs/architecture.md](docs/architecture.md).
 
 주요 흐름은 시퀀스 다이어그램으로 분리 (각 파일은 *하나의 시간 척도* 만 다룸):
 
