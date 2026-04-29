@@ -19,5 +19,8 @@ vault-init-keys.json
 .idea/
 .vscode/
 *.swp
-/docs
+/docs/examples
+/docs/standards
+/docs/adr
 AGENTS.md
+/presentation
