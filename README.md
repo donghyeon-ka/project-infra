@@ -189,7 +189,7 @@ k8s/overlays/dev/vso  build=ok  schema=ok  lint=ok
 
 | 영역 | 상태 |
 |---|---|
-| dev overlay 매니페스트 | 구성됨 (kustomize / kubeconform / kube-linter 통과) |
+| dev overlay 매니페스트 | 구성됨 (kustomize / kubeconform / kube-linter 검증 가능) |
 | Vault + VSO 부트스트랩 | idempotent script 로 구성 |
 | Traefik HelmChartConfig + Middleware | 구성됨 |
 | ForwardAuth variant overlay | manifest 준비됨. cert-manager / DNS 이후 E2E 검증 필요 |
