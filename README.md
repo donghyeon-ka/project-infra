@@ -1,6 +1,6 @@
 # Project-Infra
 
-Kubernetes(K3s) 기반 백엔드 운영 환경을 **Git 단일 source-of-truth** 로 관리하는 개인 프로젝트. auth-server / Keycloak / PostgreSQL / MinIO / Docker Registry 를 Vault·VSO 시크릿 파이프라인 위에 올리고, NetworkPolicy default-deny 와 Traefik Ingress 를 통한 인증 차단을 함께 운영한다.
+Kubernetes(K3s) 기반 백엔드 실행 환경을 **Git 단일 source-of-truth** 로 관리하는 개인 프로젝트입니다. auth-server, Keycloak, PostgreSQL, MinIO, Docker Registry 를 Vault·VSO 시크릿 파이프라인 위에 구성하고, NetworkPolicy default-deny 와 Traefik ForwardAuth 기반 인증 차단 구조를 함께 설계했습니다.
 
 | | |
 |---|---|
@@ -168,7 +168,7 @@ dev 환경은 **K3s packaged Traefik 을 그대로 두되 매니페스트에 손
 bash k8s/scripts/ci/validate.sh
 ```
 
-3 단 검증을 모든 overlay 에 적용한다:
+`validate.sh` 는 주요 overlay 에 대해 다음 3 단 검증을 수행하도록 구성되어 있습니다.
 
 1. **`kustomize build`** — 환경 중립성 / patch 유효성
 2. **`kubeconform -strict`** — Kubernetes OpenAPI + Datree CRD catalog 기준 스키마 검사
@@ -189,12 +189,12 @@ k8s/overlays/dev/vso  build=ok  schema=ok  lint=ok
 
 | 영역 | 상태 |
 |---|---|
-| dev overlay 매니페스트 | 완성 (kustomize/kubeconform/kube-linter 통과) |
-| Vault + VSO 부트스트랩 | 완성 (idempotent 스크립트) |
-| Traefik HelmChartConfig + Middleware | 완성 |
-| ForwardAuth variant overlay | 매니페스트 준비 완료, 실 적용은 cert-manager / DNS 의존 |
-| KeycloakRealmImport (Git-managed realm) | overlay 준비 완료 |
-| cert-manager + ClusterIssuer | overlay 준비 완료, 실제 발급은 외부 DNS 필요 |
+| dev overlay 매니페스트 | 구성됨 (kustomize / kubeconform / kube-linter 통과) |
+| Vault + VSO 부트스트랩 | idempotent script 로 구성 |
+| Traefik HelmChartConfig + Middleware | 구성됨 |
+| ForwardAuth variant overlay | manifest 준비됨. cert-manager / DNS 이후 E2E 검증 필요 |
+| KeycloakRealmImport | overlay 준비됨. 실제 적용 결과 확인 필요 |
+| cert-manager + ClusterIssuer | overlay 준비됨. 실제 인증서 발급은 외부 DNS 필요 |
 | staging / prod overlay | 의도적으로 비어둠 |
 | Terraform 모듈 | 디렉토리 contracts 만 존재 |
 
