@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Seed 5 application secrets into Vault KV v2.
+# Seed application secrets into Vault KV v2.
 #
 # 이미 Vault KV 에 있는 경로는 skip — 운영자가 회전한 값을 절대 덮어쓰지 않는다.
 # 아직 없는 경로에 대해 다음 순으로 값을 결정:
@@ -33,6 +33,8 @@
 #   AUTH_SERVER_INGRESS_CLIENT_SECRET   Keycloak realm client 'auth-server-ingress' 의 secret.
 #                                       KeycloakRealmImport 가 ${AUTH_SERVER_INGRESS_CLIENT_SECRET}
 #                                       env 치환으로 가져간다. oauth2-proxy 도 동일 값을 받음.
+#
+#   OAUTH2_PROXY_COOKIE_SECRET          oauth2-proxy session cookie signing/encryption key.
 #
 #   DOCKER_REGISTRY_MINIO_ACCESSKEY     docker-registry 가 MinIO 에 접근할 때 쓸 AK.
 #                                       기본값 'docker-registry'. MinIO user 이름이 됨.
@@ -124,6 +126,13 @@ kv_put_json() {
   jq -n "$@" "$jq_expr" \
     | kubectl exec -i -n "$VAULT_NAMESPACE" "$VAULT_POD" -- \
         vault kv put "secret/${path}" - >/dev/null
+}
+
+vault_kv_get_field() {
+  local path="$1"
+  local field="$2"
+  vault_exec kv get -format=json "secret/${path}" \
+    | jq -r --arg field "$field" '.data.data[$field] // empty'
 }
 
 seed_identity_postgres_superuser() {
@@ -223,10 +232,32 @@ seed_keycloak_client_auth_server_ingress() {
   local pw
   pw="$(resolve_password AUTH_SERVER_INGRESS_CLIENT_SECRET \
         "Keycloak client 'auth-server-ingress' secret")"
+  AUTH_SERVER_INGRESS_CLIENT_SECRET="$pw"
   kv_put_json "keycloak/clients/auth-server-ingress" \
     '{client_secret: $p}' \
     --arg p "$pw"
   log "  secret/keycloak/clients/auth-server-ingress 작성"
+}
+
+seed_oauth2_proxy_forward_auth() {
+  seed_if_missing "oauth2-proxy/forward-auth" || return 0
+  local client_secret cookie_secret
+  if [[ -n "${AUTH_SERVER_INGRESS_CLIENT_SECRET:-}" ]]; then
+    client_secret="$AUTH_SERVER_INGRESS_CLIENT_SECRET"
+  elif vault_kv_exists "keycloak/clients/auth-server-ingress"; then
+    client_secret="$(vault_kv_get_field "keycloak/clients/auth-server-ingress" "client_secret")"
+  else
+    client_secret="$(resolve_password AUTH_SERVER_INGRESS_CLIENT_SECRET \
+          "Keycloak client 'auth-server-ingress' secret")"
+  fi
+  [[ -n "$client_secret" ]] || die "auth-server-ingress client secret 을 확인할 수 없습니다."
+  cookie_secret="$(resolve_password OAUTH2_PROXY_COOKIE_SECRET \
+        "oauth2-proxy cookie secret")"
+  kv_put_json "oauth2-proxy/forward-auth" \
+    '{client_secret: $client_secret, cookie_secret: $cookie_secret}' \
+    --arg client_secret "$client_secret" \
+    --arg cookie_secret "$cookie_secret"
+  log "  secret/oauth2-proxy/forward-auth 작성"
 }
 
 main() {
@@ -243,6 +274,7 @@ main() {
   seed_keycloak_bootstrap_admin
   seed_minio_tenant_env
   seed_keycloak_client_auth_server_ingress
+  seed_oauth2_proxy_forward_auth
   seed_docker_registry_minio
   seed_docker_registry_basic_auth
 

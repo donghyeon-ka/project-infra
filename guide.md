@@ -118,7 +118,7 @@ AUTO_GENERATE=yes bash k8s/scripts/bin/bootstrap.sh dev
 
 > **주의**: 현재 `bootstrap.sh` 는 `mnt` namespace 자원까지만 자동 배포한다. `k8s/overlays/dev/platform/traefik/` 와 `k8s/overlays/dev/tls/` 는 namespace 가 다르거나 optional dependency 가 있어 운영자가 별도로 적용한다 (§4, §5).
 >
-> `k8s/overlays/dev/platform/cert-manager/`, `k8s/overlays/dev/platform/keycloak-operator/`, `k8s/overlays/dev-with-forward-auth/`, `k8s/overlays/dev/keycloak-realm/` 은 CRD / 외부 DNS / 인증 흐름 의존성이 있어 자동 부트스트랩 대상이 아니다 (§5, §6).
+> `k8s/overlays/dev/platform/cert-manager/`, `k8s/overlays/dev/platform/keycloak-operator/`, `k8s/overlays/dev/keycloak-realm/` 은 CRD / 외부 DNS / 인증 흐름 의존성이 있어 자동 부트스트랩 전에 선행/별도 확인이 필요하다 (§5, §6).
 
 ### 생성되는 파일
 
@@ -243,7 +243,7 @@ app Pod 는 기본 deny 상태이므로, Traefik 에서 들어오는 8080/TCP �
 
 ### ForwardAuth variant 적용
 
-repo 에는 선택형 component `k8s/components/forward-auth/` 와 이를 결합한 overlay `k8s/overlays/dev-with-forward-auth/` 가 준비되어 있다. 기본 `dev` 전체를 포함한 뒤 oauth2-proxy 와 `auth-server` 보호 middleware 를 덧씌우는 방식이라, 기본 dev 운영과 인증 실험 구성을 깔끔하게 분리할 수 있다.
+repo 에는 component `k8s/components/forward-auth/` 가 준비되어 있고, 현재 `k8s/overlays/dev/` 가 이 component 를 직접 포함한다. 따라서 dev overlay 를 적용하면 oauth2-proxy 와 `auth-server` 보호 middleware 도 함께 렌더링된다.
 
 적용 전제:
 
@@ -257,7 +257,7 @@ repo 에는 선택형 component `k8s/components/forward-auth/` 와 이를 결합
 적용:
 
 ```bash
-kubectl apply -k k8s/overlays/dev-with-forward-auth
+kubectl apply -k k8s/overlays/dev
 ```
 
 이 overlay 가 추가하는 것:
@@ -267,7 +267,7 @@ kubectl apply -k k8s/overlays/dev-with-forward-auth
 - `oauth2-proxy-auth` Traefik `Middleware`
 - `auth-server` Ingress patch — `project.com/` 요청은 oauth2-proxy ForwardAuth 를 먼저 통과해야 함
 
-> **주의**: 현재 dev 용 oauth2-proxy 설정은 `ssl_insecure_skip_verify=true` 를 사용한다. 외부 DNS 와 ACME 인증서 발급까지 완료된 상태가 아니라 Keycloak 공개 호스트 인증서 체인이 안정적으로 준비되지 않았기 때문. cert-manager + 정식 `Certificate` 도입 후 (§5) 이 옵션을 제거해야 한다.
+> **주의**: 현재 dev 용 oauth2-proxy 설정은 `ssl_insecure_skip_verify=false` 이다. 따라서 `keycloak.dev.example.com` 인증서 체인이 정상이어야 로그인 흐름이 끝까지 진행된다.
 
 > **참고**: dev 운영 완료까지 남은 항목 (DNS / ACME 인증서 / realm 적용 / negative test 등) 은 [README Limitations](README.md#limitations-honest-scope) 참고.
 
@@ -319,7 +319,7 @@ kubectl -n mnt get certificate
 kubectl -n mnt describe certificate project-com    # Status.Conditions.Ready=True
 ```
 
-> **권장**: 인증서 발급이 끝난 뒤 `dev-with-forward-auth` 의 `ssl_insecure_skip_verify=true` 를 제거한다 (§4).
+> **권장**: 인증서 발급 상태를 먼저 확인한 뒤 ForwardAuth E2E 검증을 진행한다 (§4).
 
 ---
 
@@ -406,7 +406,7 @@ REPO_ROOT="$(pwd)" bash k8s/scripts/tasks/vault-seed-apps.sh
 | `secret/auth-server/db` | `SPRING_DATASOURCE_USERNAME` (기본 auth_server), `SPRING_DATASOURCE_PASSWORD` | Spring Boot configtree + Flyway |
 | `secret/keycloak/bootstrap-admin` | `KEYCLOAK_ADMIN` (기본 admin), `KEYCLOAK_ADMIN_PASSWORD` | Keycloak 초기 관리자 계정 |
 | `secret/minio/tenant-env` | `config.env` (env-file 포맷 단일 키) | MinIO Operator Tenant 루트 자격증명 |
-| `secret/oauth2-proxy/forward-auth` | `client-secret`, `cookie-secret` | `dev-with-forward-auth` overlay 의 oauth2-proxy confidential client / session cookie |
+| `secret/oauth2-proxy/forward-auth` | `client_secret`, `cookie_secret` | dev overlay 의 oauth2-proxy confidential client / session cookie |
 | `secret/docker-registry/basic-auth` | `username`, `password`, `users` (htpasswd 한 줄) | Traefik Middleware 가 외부 push 시 검증 |
 
 ### 값 조회

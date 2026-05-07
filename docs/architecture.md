@@ -53,7 +53,7 @@ Project-Infra/
 │   │   │   ├── keycloak-realm/                 # KeycloakRealmImport (Git-managed realm/client)
 │   │   │   ├── storage/                        # minio + VaultStaticSecret + certConfig FQDN patch
 │   │   │   └── test/                           # test-server 1/2/3
-│   │   ├── dev-with-forward-auth/              # dev + components/forward-auth variant
+│   │   ├── components/forward-auth/            # dev overlay 에 포함되는 ForwardAuth component
 │   │   ├── staging/                            # 의도적으로 비어둠
 │   │   └── prod/                               # 의도적으로 비어둠
 │   │

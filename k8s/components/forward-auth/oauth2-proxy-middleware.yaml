@@ -11,7 +11,7 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
 spec:
   forwardAuth:
-    address: http://oauth2-proxy.mnt.svc.cluster.local:4180/
+    address: http://oauth2-proxy.mnt.svc.cluster.local:4180/oauth2/auth
     trustForwardHeader: true
     authResponseHeaders:
       - Authorization
@@ -21,3 +21,26 @@ spec:
       - X-Auth-Request-User
       - X-Forwarded-Email
       - X-Forwarded-User
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: oauth2-proxy-errors
+  labels:
+    app.kubernetes.io/name: oauth2-proxy
+    app.kubernetes.io/instance: oauth2-proxy
+    app.kubernetes.io/version: "7.15.2"
+    app.kubernetes.io/component: auth-proxy
+    app.kubernetes.io/part-of: auth-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  errors:
+    status:
+      - "401-403"
+    statusRewrites:
+      "401": 302
+      "403": 302
+    service:
+      name: oauth2-proxy
+      port: 4180
+    query: /oauth2/start?rd={url}

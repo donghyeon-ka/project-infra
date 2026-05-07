@@ -95,8 +95,7 @@ Kustomize `base / components / overlays` 구조입니다.
 |---|---|
 | `k8s/base/` | 환경 중립 매니페스트 |
 | `k8s/components/` | 재사용 component. 현재 ForwardAuth component |
-| `k8s/overlays/dev/` | 기본 dev 환경 |
-| `k8s/overlays/dev-with-forward-auth/` | dev + ForwardAuth variant |
+| `k8s/overlays/dev/` | 기본 dev 환경. 현재 ForwardAuth component 포함 |
 | `k8s/overlays/{staging,prod}/` | 의도적으로 비워둔 승격 지점 |
 | `k8s/scripts/` | bootstrap / validation / reusable tasks |
 | `terraform/` | contracts만 존재. 추후 구현 |
@@ -135,7 +134,7 @@ k8s/overlays/dev/vso  build=ok  schema=ok  lint=ok
 | Vault + VSO 부트스트랩 | idempotent script 로 구성 |
 | Traefik HelmChartConfig + Middleware | 구성됨 |
 | NetworkPolicy default-deny | 구성됨 |
-| ForwardAuth variant overlay | manifest 준비됨 |
+| ForwardAuth | dev overlay에 포함됨 |
 | KeycloakRealmImport | overlay 준비됨. 실제 적용 결과 확인 필요 |
 | cert-manager + ClusterIssuer | manifest 준비됨. 외부 DNS 필요 |
 | staging / prod overlay | 의도적으로 비워둠 |
@@ -149,7 +148,6 @@ k8s/overlays/dev/vso  build=ok  schema=ok  lint=ok
 
 - Vault는 file backend 단일 노드입니다. dev에서는 secret 전달 경로와 VSO reconcile을 검증하는 데 충분하다고 보고 선택했습니다. prod에서는 `raft` storage와 KMS auto-unseal로 전환해야 합니다.
 - cert-manager / ClusterIssuer manifest는 있지만, 실제 ACME 인증서 발급은 외부 DNS가 Traefik 진입점을 가리켜야 완료됩니다.
-- oauth2-proxy의 `ssl_insecure_skip_verify=true`는 dev 임시 설정입니다. 인증서 발급 후 제거해야 합니다.
 - ForwardAuth 로그인 / 로그아웃 / deny-allow E2E 검증은 인증서와 DNS 정리 후 진행할 항목입니다.
 - Postgres 백업, Terraform 실제 모듈, staging/prod overlay는 아직 구현하지 않았습니다.
 

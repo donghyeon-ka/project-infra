@@ -30,4 +30,4 @@ spec:
     - keycloak.dev.example.com
   issuerRef:
     kind: ClusterIssuer
-    name: letsencrypt-staging
+    name: dev-selfsigned

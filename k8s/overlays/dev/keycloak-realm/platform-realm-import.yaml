@@ -11,6 +11,11 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
 spec:
   keycloakCRName: keycloak
+  placeholders:
+    AUTH_SERVER_INGRESS_CLIENT_SECRET:
+      secret:
+        name: keycloak-client-auth-server-ingress
+        key: client-secret
   realm:
     realm: platform
     enabled: true

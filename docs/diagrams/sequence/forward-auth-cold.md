@@ -46,7 +46,7 @@ sequenceDiagram
 - **Ingress 라우팅이 분기의 뿌리**: 그림의 Note 가 가리키듯 `/oauth2/*` 와 그 외 path 가 *Ingress 단에서* 갈린다. 이 라우팅이 없으면 cold path 가 시작 자체를 못 한다.
 - **PKCE 가 핵심 보안 장치**: `code_verifier` 는 메시지 7~8 에서 oauth2-proxy 가 생성해 자기 세션에 저장하고, 메시지 16 에서 token exchange 시 함께 보낸다. Keycloak 은 `code_challenge` 와 매칭 검증. **authorization code 가 중간에 가로채지더라도 verifier 없이는 token 으로 교환 불가**. oauth2-proxy v7.5+ 는 PKCE 가 기본 활성.
 - **JWKS 검증의 위치**: 메시지 18~19 (`GET .../certs`) 가 별개의 호출이다. oauth2-proxy 는 JWKS 를 *처음 1 회 fetch 후 캐시* 하고, Keycloak 의 JWKS endpoint 가 회전 가능 (`kid` 헤더로 식별). **id_token 서명 검증 (메시지 20 의 Note) 이 끝나야 쿠키가 발급되므로**, 이후 warm path 에서 백엔드가 받는 `X-Forwarded-User` 는 *이미 검증된 사용자* 다.
-- **dev 환경의 임시값**: 현재 oauth2-proxy 설정에 `ssl_insecure_skip_verify=true`. 이유는 Keycloak 공개 호스트(`keycloak.dev.example.com`) cert 체인이 cert-manager 발급 전이라 미완성. cert-manager + ACME 발급 후 제거.
+- **TLS 검증 전제**: 현재 oauth2-proxy 설정은 `ssl_insecure_skip_verify=false` 이다. 따라서 Keycloak 공개 호스트(`keycloak.dev.example.com`) 인증서 체인이 정상이어야 token 교환과 JWKS 검증 흐름이 끝까지 진행된다.
 
 ## 평소 요청 흐름은?
 

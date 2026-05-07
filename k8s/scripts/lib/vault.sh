@@ -59,9 +59,7 @@ vault_unseal_from_keyfile() {
   local i key
   for ((i = 0; i < threshold; i++)); do
     key="$(jq -r ".unseal_keys_b64[$i]" "$keys_file")"
-    # vault operator unseal 은 argv 에 키가 없고 stdin 이 TTY 가 아니면
-    # stdin 에서 읽는다. kubectl exec -i (vault_exec) 가 이 조건을 만든다.
-    printf '%s' "$key" | vault_exec operator unseal >/dev/null
+    vault_exec operator unseal "$key" >/dev/null
   done
   unset key
   log "Vault unseal 완료 (threshold=${threshold})"
@@ -80,6 +78,7 @@ vault_login_root_from_keyfile() {
 # vault_kv_exists <path>  — returns 0 if the KV v2 secret exists.
 vault_kv_exists() {
   local path="$1"
+  [[ "$path" == secret/* ]] || path="secret/${path}"
   vault_exec kv get -format=json "$path" >/dev/null 2>&1
 }
 

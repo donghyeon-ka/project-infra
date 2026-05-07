@@ -91,7 +91,7 @@ enable_k8s_auth() {
 }
 
 write_policies_and_roles() {
-  log "policy 'vso-auth-platform' 작성 (identity-postgres/*, auth-server/*, keycloak/*)"
+  log "policy 'vso-auth-platform' 작성 (identity-postgres/*, auth-server/*, keycloak/*, oauth2-proxy/*)"
   vault_exec_sh 'cat <<"EOF" | vault policy write vso-auth-platform -
 path "secret/data/identity-postgres/*" {
   capabilities = ["read"]
@@ -100,6 +100,9 @@ path "secret/data/auth-server/*" {
   capabilities = ["read"]
 }
 path "secret/data/keycloak/*" {
+  capabilities = ["read"]
+}
+path "secret/data/oauth2-proxy/*" {
   capabilities = ["read"]
 }
 EOF

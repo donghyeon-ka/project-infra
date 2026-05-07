@@ -30,4 +30,4 @@ spec:
     - project.com
   issuerRef:
     kind: ClusterIssuer
-    name: letsencrypt-staging
+    name: dev-selfsigned

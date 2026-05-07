@@ -36,6 +36,7 @@ data:
     cookie_samesite = "lax"
     cookie_csrf_per_request = true
     set_xauthrequest = true
+    set_authorization_header = true
     pass_access_token = true
     pass_authorization_header = true
     ssl_insecure_skip_verify = false

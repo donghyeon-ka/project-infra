@@ -1,4 +1,4 @@
-# 운영 중 만난 함정 7건 — 사건 카탈로그
+# 운영 중 만난 함정 8건 — 사건 카탈로그
 
 K3s 기반 로컬 클러스터에서 Project-Infra 를 부트스트랩 / 운영하면서 실제로 만났던 사건들의 narrative 정리.
 운영자 절차서 톤은 [`guide.md`](../guide.md) 의 15장 (`15.1` ~ `15.11`) 에 있고, 이 문서는 사건 단위로 "무엇을 보고 / 왜 그랬고 / 어떻게 풀었는지" 를 짧게 쓰기 위한 자료다.
@@ -9,9 +9,10 @@ K3s 기반 로컬 클러스터에서 Project-Infra 를 부트스트랩 / 운영�
 | 2 | `vault-0` 가 `0/1 Running` 에서 멈춤 | [15.10](../guide.md#1510-vault-0-이-01-running-에서-멈춤) |
 | 3 | `helm upgrade` 가 `has no deployed releases` 로 실패 | [15.11](../guide.md#1511-helm-upgrade-가-has-no-deployed-releases-로-실패) |
 | 4 | VSO 가 기존 K8s Secret 을 덮어쓰지 않음 | [15.8](../guide.md#158-기존-k8s-secret-이-남아있을-때) |
-| 5 | namespace 가 `Terminating` 에 걸림 | [15.9](../guide.md#159-namespace-가-terminating-에-걸림) |
-| 6 | PodSecurity 위반 경고 (admission) | [15.7](../guide.md#157-podsecurity-위반-경고) |
-| 7 | VSO 가 Vault 로그인 실패 | [15.2](../guide.md#152-vso-가-vault-에-로그인-실패) |
+| 5 | ForwardAuth 로그인 E2E 검증 실패 | (현장 검증 사건) |
+| 6 | namespace 가 `Terminating` 에 걸림 | [15.9](../guide.md#159-namespace-가-terminating-에-걸림) |
+| 7 | PodSecurity 위반 경고 (admission) | [15.7](../guide.md#157-podsecurity-위반-경고) |
+| 8 | VSO 가 Vault 로그인 실패 | [15.2](../guide.md#152-vso-가-vault-에-로그인-실패) |
 
 ---
 
@@ -243,7 +244,419 @@ kubectl get secret <name> -n <ns> -o yaml
 
 ---
 
-## 5. namespace 가 `Terminating` 에 걸림
+## 5. ForwardAuth 로그인 E2E 검증 실패
+
+### 한 줄 요약
+
+oauth2-proxy / Keycloak / Traefik / auth-server 사이의 설정이 각각 조금씩 어긋나 있어, "로그인 화면은 뜨는가" 와 "로그인 후 API 가 인증된 요청으로 통과하는가" 가 단계별로 실패했다. 문제는 하나가 아니라 Traefik CRD 누락, TLS Secret 부재, Keycloak client secret 불일치, oauth2-proxy Authorization header 미전달, auth-server issuer 설정 미반영이 연쇄적으로 겹친 사건이었다.
+
+### 배경
+
+목표 흐름은 다음과 같다.
+
+```text
+Browser
+  -> https://project.com/*
+  -> Traefik Ingress
+  -> oauth2-proxy ForwardAuth (/oauth2/auth)
+  -> Keycloak OIDC login
+  -> oauth2-proxy callback (/oauth2/callback)
+  -> auth-server
+```
+
+Boundary 기준으로 나누면 다음과 같다.
+
+| Boundary | 정상 신호 | 실패 신호 |
+|---|---|---|
+| Browser local DNS/TLS | Chrome 이 `project.com` 을 Traefik IP 로 열고 self-signed 인증서를 통과 | public DNS 로 빠짐, `ERR_CERT_*`, HSTS/인증서 경고에서 진행 불가 |
+| Traefik routing/TLS | host rule 이 잡히고 TLS Secret 으로 handshake 성공 | Traefik `404`, `unknown TLS options`, `secret ... does not exist`, SNI 실패 |
+| Traefik ForwardAuth | 미인증 요청이 oauth2-proxy `/oauth2/auth` 로 위임 | backend 로 바로 감, 또는 항상 `Unauthorized` |
+| Traefik error redirect | 미인증 요청이 `302 Location: keycloak...` 로 변환 | `Location` 은 있는데 status 가 `401` 이라 브라우저가 이동하지 않음 |
+| oauth2-proxy -> Keycloak authorize | Keycloak 로그인 화면 `200` | authorize URL 생성 실패, 잘못된 redirect URI |
+| Keycloak -> oauth2-proxy callback/token | callback 후 oauth2-proxy session cookie 발급 | `unauthorized_client`, invalid client credentials |
+| oauth2-proxy -> auth-server header | `/oauth2/auth` 가 `Authorization: Bearer ...` 반환 | auth-server 가 `anonymous` 로 처리 |
+| auth-server JWT validation | issuer/JWK 검증 통과 후 application response 반환 | issuer mismatch, JWK 조회 실패, `401` |
+| auth-server application route | 실제 API/화면 응답 | 인증은 통과했지만 route 없음, 예: `404 PRES-005` |
+
+dev 환경에서는 실제 공인 DNS / ACME 인증서가 아직 준비되지 않았다. 그래서 CLI 검증은 아래처럼 DNS 와 TLS 검증을 임시 우회했다.
+
+```bash
+curl -k \
+  --resolve project.com:443:10.208.141.123 \
+  --resolve keycloak.dev.example.com:443:10.208.141.123 \
+  https://project.com/oauth2/start?rd=https://project.com/api/me
+```
+
+브라우저는 `curl --resolve` 와 `-k` 를 쓸 수 없으므로, 직접 웹사이트로 검증하려면 로컬 `/etc/hosts` 와 self-signed 인증서 예외가 필요하다.
+
+```text
+10.208.141.123  project.com
+10.208.141.123  keycloak.dev.example.com
+```
+
+### 증상 1: Ingress 가 404 또는 TLS handshake 실패
+
+Boundary: `Traefik routing/TLS`
+
+처음에는 `https://project.com/api/me` 가 Traefik 기본 `404 page not found` 를 반환했고, Keycloak discovery 도 TLS 단계에서 실패했다.
+
+대표 증상:
+
+```text
+HTTP/2 404
+404 page not found
+
+curl: (35) OpenSSL: tlsv1 unrecognized name
+```
+
+### Root Cause 1
+
+`auth-server`, `oauth2-proxy`, `keycloak-public` Ingress 는 모두 아래 annotation 을 참조하고 있었다.
+
+```text
+traefik.ingress.kubernetes.io/router.tls.options: kube-system-modern-tls@kubernetescrd
+traefik.ingress.kubernetes.io/router.middlewares: kube-system-https-redirect@kubernetescrd,...
+```
+
+하지만 live cluster 에는 `modern-tls`, `https-redirect`, `security-headers` 가 없었다. Traefik 로그에는 다음 오류가 반복됐다.
+
+```text
+unknown TLS options: kube-system-modern-tls@kubernetescrd
+```
+
+결과적으로 Traefik 가 해당 router 를 정상 구성하지 못했고, host/path 가 맞아도 요청이 backend 로 가지 않았다.
+
+### 해결 1
+
+Traefik packaged manifest 를 직접 수정하지 않고, Git source-of-truth 인 overlay 를 적용했다.
+
+```bash
+kubectl apply -k k8s/overlays/dev/platform/traefik
+```
+
+적용된 리소스:
+
+- `HelmChartConfig/traefik`
+- `Middleware/https-redirect`
+- `Middleware/security-headers`
+- `TLSOption/modern-tls`
+
+검증:
+
+```bash
+kubectl -n kube-system get tlsoption,middleware
+kubectl -n kube-system logs deploy/traefik --tail=200
+```
+
+### 증상 2: TLS Secret 이 없어 HTTPS 라우팅이 SNI 에서 실패
+
+Boundary: `Traefik routing/TLS` 와 `cert-manager -> Traefik TLS Secret`
+
+Traefik CRD 를 적용한 뒤에도 HTTPS 요청은 `tlsv1 unrecognized name` 으로 실패했다. Traefik 로그에는 아래 메시지가 있었다.
+
+```text
+Error configuring TLS: secret mnt/project-com-tls does not exist
+Error configuring TLS: secret mnt/keycloak-dev-example-com-tls does not exist
+```
+
+### Root Cause 2
+
+dev `Certificate` 리소스가 `letsencrypt-staging` 을 참조하고 있었다. 하지만 현재 dev 도메인(`project.com`, `keycloak.dev.example.com`) 은 외부 공인 DNS 가 Traefik 진입점으로 향하지 않는다. ACME HTTP-01 은 public DNS 와 80/443 도달성이 필요하므로 인증서 발급이 완료될 수 없었다.
+
+또한 `TLSOption` 의 `sniStrict: true` 때문에 TLS Secret 이 없는 host 는 handshake 단계에서 차단됐다. 보안상 의도한 동작이지만, dev 검증에는 별도 인증서가 필요했다.
+
+### 해결 2
+
+dev 전용 `ClusterIssuer/dev-selfsigned` 를 추가하고, dev TLS `Certificate` 들이 이를 참조하도록 바꿨다.
+
+변경 파일:
+
+- `k8s/overlays/dev/platform/cert-manager-issuers/dev-selfsigned-clusterissuer.yaml`
+- `k8s/overlays/dev/platform/cert-manager-issuers/kustomization.yaml`
+- `k8s/overlays/dev/tls/project-com-certificate.yaml`
+- `k8s/overlays/dev/tls/keycloak-dev-certificate.yaml`
+- `k8s/overlays/dev/tls/registry-project-com-certificate.yaml`
+
+적용:
+
+```bash
+kubectl apply -k k8s/overlays/dev/platform/cert-manager-issuers
+kubectl apply -k k8s/overlays/dev/tls
+kubectl -n mnt wait --for=condition=Ready certificate/project-com --timeout=120s
+kubectl -n mnt wait --for=condition=Ready certificate/keycloak-dev-example-com --timeout=120s
+```
+
+검증 결과 Keycloak discovery 가 HTTPS 로 `200` 을 반환했다.
+
+```text
+GET https://keycloak.dev.example.com/realms/platform/.well-known/openid-configuration
+HTTP/2 200
+issuer: https://keycloak.dev.example.com/realms/platform
+```
+
+### 증상 3: 로그인 화면은 뜨지만 callback 에서 500
+
+Boundary: `Keycloak -> oauth2-proxy callback/token`
+
+`/oauth2/start` 는 Keycloak authorize URL 로 `302` 되고, Keycloak 로그인 화면까지는 열렸다. 하지만 로그인 후 `/oauth2/callback` 에서 oauth2-proxy 가 `500 Internal Server Error` 를 반환했다.
+
+oauth2-proxy 로그:
+
+```text
+Error redeeming code during OAuth2 callback:
+token exchange failed: oauth2: "unauthorized_client" "Invalid client or Invalid client credentials"
+```
+
+### Root Cause 3
+
+Vault / K8s Secret 의 `auth-server-ingress` client secret 과 Keycloak live realm 의 client secret 이 달랐다.
+
+이유:
+
+- Vault seed 스크립트가 `keycloak/clients/auth-server-ingress` 와 `oauth2-proxy/forward-auth` secret 을 생성했다.
+- oauth2-proxy 는 VSO 가 만든 최신 K8s Secret 을 읽었다.
+- 하지만 이미 import 된 Keycloak realm/client 는 새 secret 으로 다시 동기화되지 않았다.
+- `KeycloakRealmImport` 는 source 에서 secret placeholder 를 보도록 수정했지만, 기존 import 결과가 자동으로 다시 적용되지 않았다.
+
+비교는 값을 출력하지 않고 hash 로 했다.
+
+```text
+k8s_client_secret_sha == oauth2_secret_sha
+keycloak_client_sha   != oauth2_secret_sha
+```
+
+### 해결 3
+
+Keycloak admin API 를 내부 port-forward 로만 열고, `auth-server-ingress` client representation 의 `secret` 을 K8s Secret 값과 동기화했다.
+
+```bash
+kubectl -n mnt port-forward svc/keycloak 18080:80
+```
+
+그 뒤 admin token 으로 client 를 조회하고 `PUT /admin/realms/platform/clients/{id}` 로 secret 을 반영했다. 반영 후 hash 가 일치했다.
+
+```text
+desired_sha  == keycloak_sha
+update_status=204
+```
+
+주의: Keycloak public ingress 는 의도적으로 `/admin/` 을 노출하지 않는다. admin API 작업은 port-forward, VPN, 또는 내부 운영 경로로만 수행한다.
+
+### 증상 4: 미인증 요청이 Keycloak 으로 자동 이동하지 않음
+
+Boundary: `Traefik ForwardAuth` 와 `Traefik error redirect`
+
+미인증 상태에서 `https://project.com/` 또는 `https://project.com/api/me` 를 열면 oauth2-proxy 의 로그인 시작 응답이 본문에는 보였지만, HTTP status 는 여전히 `401` 이었다. 이 경우 브라우저는 `Location` header 가 있어도 자동으로 따라가지 않는다.
+
+대표 응답:
+
+```text
+HTTP/2 401
+location: https://keycloak.dev.example.com/realms/platform/protocol/openid-connect/auth?...
+
+<a href="https://keycloak.dev.example.com/...">Found</a>.
+```
+
+### Root Cause 4
+
+Traefik `errors` middleware 는 `/oauth2/start?rd={url}` 를 내부 호출해 응답 body/header 를 가져오지만, 기본 동작만으로는 원래 오류 status 를 유지할 수 있다. 그 결과 oauth2-proxy 가 `302 Location` 을 만들었더라도 최종 클라이언트 응답이 `401` 로 남아 브라우저 redirect 가 일어나지 않았다.
+
+또한 errors middleware 가 forwardAuth 의 `401` 을 감싸려면 middleware 순서가 중요하다. `oauth2-proxy-errors` 가 `oauth2-proxy-auth` 앞에 있어야 forwardAuth 실패 응답을 로그인 시작 응답으로 바꿀 수 있다.
+
+### 해결 4
+
+`oauth2-proxy-errors` 에 `statusRewrites` 를 추가하고, auth-server Ingress middleware 순서를 조정했다.
+
+```yaml
+spec:
+  errors:
+    status:
+      - "401-403"
+    statusRewrites:
+      "401": 302
+      "403": 302
+    service:
+      name: oauth2-proxy
+      port: 4180
+    query: /oauth2/start?rd={url}
+```
+
+auth-server Ingress 순서:
+
+```text
+kube-system-https-redirect@kubernetescrd,
+mnt-oauth2-proxy-errors@kubernetescrd,
+mnt-oauth2-proxy-auth@kubernetescrd,
+kube-system-security-headers@kubernetescrd
+```
+
+검증:
+
+```bash
+curl -k -D - \
+  --resolve project.com:443:10.208.141.123 \
+  https://project.com/
+```
+
+정상 응답:
+
+```text
+HTTP/2 302
+location: https://keycloak.dev.example.com/realms/platform/protocol/openid-connect/auth?...
+```
+
+### 증상 5: callback 은 성공하지만 auth-server 가 계속 401
+
+Boundary: `oauth2-proxy -> auth-server header`
+
+Keycloak client secret 을 맞춘 뒤 oauth2-proxy callback 은 성공했고, `_oauth2_proxy` 세션 쿠키도 발급됐다. oauth2-proxy 로그에도 인증 성공이 찍혔다.
+
+```text
+[AuthSuccess] Authenticated via OAuth2:
+email:dev-login-check@project.local
+groups:[role:platform-user ...]
+```
+
+하지만 `https://project.com/api/me` 는 계속 401 이었다. auth-server 로그는 사용자를 `anonymous` 로 보고 있었다.
+
+```text
+Authentication required. actorId=anonymous method=GET requestPath=/api/me
+```
+
+### Root Cause 5
+
+oauth2-proxy 의 `/oauth2/auth` 는 `X-Auth-Request-Access-Token` 은 반환했지만 `Authorization: Bearer ...` 헤더를 반환하지 않았다. auth-server 는 Spring Security Resource Server 이므로 JWT 를 `Authorization` 헤더에서 읽는다. 따라서 ForwardAuth 는 통과해도 backend 는 anonymous 요청으로 처리했다.
+
+### 해결 5
+
+oauth2-proxy config 에 아래 설정을 추가했다.
+
+```hcl
+set_authorization_header = true
+```
+
+변경 파일:
+
+- `k8s/components/forward-auth/oauth2-proxy-config.yaml`
+
+반영 후 oauth2-proxy 를 재시작했다.
+
+```bash
+kubectl -n mnt rollout restart deployment/oauth2-proxy
+kubectl -n mnt rollout status deployment/oauth2-proxy --timeout=180s
+```
+
+검증:
+
+```bash
+curl -k -D - \
+  -b /tmp/oauth2-authenticated-cookies.txt \
+  --resolve project.com:443:10.208.141.123 \
+  https://project.com/oauth2/auth
+```
+
+응답에 `Authorization: Bearer ...` 와 `X-Auth-Request-Access-Token` 이 함께 나타나면 정상이다.
+
+### 증상 6: Authorization 은 생겼지만 auth-server 가 issuer mismatch 로 실패
+
+Boundary: `auth-server JWT validation`
+
+Authorization 헤더가 생긴 뒤 auth-server 는 더 이상 단순 anonymous 만 보지 않았다. 대신 JWT decoder 초기화에서 issuer mismatch 를 냈다.
+
+```text
+The Issuer "https://keycloak.dev.example.com/realms/platform"
+provided in the configuration did not match the requested issuer
+"http://keycloak/realms/platform"
+```
+
+### Root Cause 6
+
+auth-server 의 live Pod 가 예전 issuer 설정(`http://keycloak/realms/platform`) 을 들고 있었다. Git source 와 live ConfigMap 은 이미 외부 issuer 로 맞춰져 있었지만, Deployment 가 재시작되지 않아 Pod 환경변수에는 반영되지 않았다.
+
+정상 설정:
+
+```text
+SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI=https://keycloak.dev.example.com/realms/platform
+SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI=http://keycloak/realms/platform/protocol/openid-connect/certs
+```
+
+설계 의도는 issuer claim 검증은 외부 issuer 로 맞추고, JWK 조회는 클러스터 내부 Service 로 수행하는 것이다.
+
+### 해결 6
+
+auth-server Deployment 를 재시작했다.
+
+```bash
+kubectl -n mnt rollout restart deployment/auth-server
+kubectl -n mnt rollout status deployment/auth-server --timeout=180s
+```
+
+### 최종 검증 결과
+
+새 로그인 흐름으로 다음이 확인됐다.
+
+1. `/oauth2/start` → Keycloak authorize URL `302`
+2. Keycloak 로그인 화면 `200`
+3. 로그인 폼 제출 → authorization code 발급
+4. `/oauth2/callback` → oauth2-proxy session cookie 발급
+5. oauth2-proxy `/oauth2/auth` → `202`
+6. auth response header:
+   - `Authorization: Bearer ...`
+   - `X-Auth-Request-Access-Token`
+   - `X-Auth-Request-Email`
+   - `X-Auth-Request-User`
+   - `X-Auth-Request-Preferred-Username`
+7. 미인증 요청은 `302` 로 Keycloak 로그인 화면으로 이동
+8. `/api/me` 요청은 ForwardAuth 를 통과해 auth-server 까지 도달
+
+최종 `/api/me` 응답은 auth-server 의 애플리케이션 `404 PRES-005` 였다.
+
+```json
+{
+  "success": false,
+  "code": "PRES-005",
+  "message": "요청한 리소스를 찾을 수 없습니다."
+}
+```
+
+이는 ForwardAuth 실패가 아니라 auth-server 에 해당 route 가 없다는 의미다. 인증 계층 검증 관점에서는 `401` 이 사라지고 auth-server business response 가 나온 시점이 통과 기준이다.
+
+### 브라우저로 직접 검증하는 방법
+
+curl 로는 DNS 와 TLS 를 아래 옵션으로 우회한다.
+
+```bash
+curl -k \
+  --resolve project.com:443:10.208.141.123 \
+  --resolve keycloak.dev.example.com:443:10.208.141.123 \
+  https://project.com/oauth2/start?rd=https://project.com/api/me
+```
+
+브라우저는 같은 우회를 옵션으로 줄 수 없으므로 로컬 머신에서 다음을 준비한다.
+
+1. `/etc/hosts` 에 ingress IP 매핑:
+
+   ```text
+   10.208.141.123  project.com
+   10.208.141.123  keycloak.dev.example.com
+   ```
+
+2. `https://project.com/oauth2/start?rd=https://project.com/api/me` 접속
+3. dev self-signed 인증서 경고 허용 또는 인증서 trust 등록
+4. Keycloak 로그인
+5. callback 후 `project.com` 으로 돌아오는지 확인
+
+### 교훈
+
+- ForwardAuth E2E 는 하나의 설정만 맞아서는 동작하지 않는다. Traefik CRD, TLS Secret, oauth2-proxy secret, Keycloak client secret, redirect status, backend issuer/JWK 설정이 모두 같은 세계관이어야 한다.
+- "로그인 화면이 뜬다" 는 검증의 중간 지점일 뿐이다. 반드시 callback, token exchange, session cookie, `/oauth2/auth 202`, backend 도달까지 나눠 봐야 한다.
+- dev 에서 ACME 가 안 되는 상황은 정상일 수 있다. public DNS 가 없으면 `dev-selfsigned` 로 검증하고, staging/prod 에서 ACME issuer 로 전환한다.
+- Keycloak client secret 은 Vault/K8s/oauth2-proxy/Keycloak live realm 네 곳이 한 값으로 수렴해야 한다.
+- Spring Resource Server 는 issuer claim 을 엄격히 검증한다. 내부 Service URL 과 외부 issuer URL 을 섞을 때는 `issuer-uri` 와 `jwk-set-uri` 의 역할을 분리해야 한다.
+
+---
+
+## 6. namespace 가 `Terminating` 에 걸림
 
 ### 한 줄 요약
 
@@ -293,7 +706,7 @@ kubectl get ns mnt
 
 ---
 
-## 6. PodSecurity 위반 경고 (admission)
+## 7. PodSecurity 위반 경고 (admission)
 
 ### 한 줄 요약
 
@@ -369,7 +782,7 @@ kubectl apply -k k8s/overlays/dev
 
 ---
 
-## 7. VSO 가 Vault 로그인 실패
+## 8. VSO 가 Vault 로그인 실패
 
 ### 한 줄 요약
 
