@@ -28,6 +28,7 @@ spec:
     - key encipherment
   dnsNames:
     - keycloak.dev.example.com
+    - keycloak-admin.dev.example.com
   issuerRef:
     kind: ClusterIssuer
     name: dev-selfsigned

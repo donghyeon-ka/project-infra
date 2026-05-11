@@ -13,7 +13,7 @@ metadata:
     traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
     traefik.ingress.kubernetes.io/router.tls.options: kube-system-modern-tls@kubernetescrd # kube-system namespace에 있는 modern-tls라는 이름의 Traefik TLSOption CRD를 사용
-    traefik.ingress.kubernetes.io/router.middlewares: kube-system-https-redirect@kubernetescrd,kube-system-security-headers@kubernetescrd # 응답 처리 중간에 적용할 Traefik middleware 목록
+    traefik.ingress.kubernetes.io/router.middlewares: kube-system-https-redirect@kubernetescrd,mnt-keycloak-security-headers@kubernetescrd # 응답 처리 중간에 적용할 Traefik middleware 목록
 spec:
   ingressClassName: traefik
   tls:

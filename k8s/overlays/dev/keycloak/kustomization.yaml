@@ -6,7 +6,9 @@ namespace: mnt
 resources:
   - ../../../base/app/identity/keycloak/stateless/keycloak
   - vault-secrets.yaml
+  - keycloak-security-headers.yaml
   - ingress-public.yaml
+  - ingress-admin.yaml
   - networkpolicy.yaml
 
 patches:

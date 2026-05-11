@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: keycloak-admin
+  labels:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/instance: keycloak
+    app.kubernetes.io/version: "26.6.1"
+    app.kubernetes.io/component: identity-provider
+    app.kubernetes.io/part-of: auth-platform
+    app.kubernetes.io/managed-by: kustomize
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.options: kube-system-modern-tls@kubernetescrd
+    traefik.ingress.kubernetes.io/router.middlewares: kube-system-https-redirect@kubernetescrd,mnt-keycloak-security-headers@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - keycloak-admin.dev.example.com
+      secretName: keycloak-dev-example-com-tls
+  rules:
+    - host: keycloak-admin.dev.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port:
+                  name: http
