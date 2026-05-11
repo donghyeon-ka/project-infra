@@ -22,3 +22,6 @@ patches:
           - minio-hl
           - minio.mnt.svc.cluster.local
           - "*.minio-hl.mnt.svc.cluster.local"
+      - op: replace
+        path: /spec/requestAutoCert
+        value: false

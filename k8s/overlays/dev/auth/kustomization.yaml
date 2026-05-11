@@ -21,10 +21,10 @@ patches:
     patch: |-
       - op: add
         path: /data/APP_SECURITY_KEYCLOAK_ISSUER_URI
-        value: https://keycloak.dev.example.com/realms/platform
+        value: http://keycloak.dev.example.com/realms/platform
       - op: add
         path: /data/SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI
-        value: https://keycloak.dev.example.com/realms/platform
+        value: http://keycloak.dev.example.com/realms/platform
       - op: add
         path: /data/SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI
         value: http://keycloak/realms/platform/protocol/openid-connect/certs

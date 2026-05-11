@@ -13,8 +13,6 @@ resources:
   - keycloak
   - storage
   - test
-  - platform/cert-manager-issuers
-  - tls
   - keycloak-realm
 
 components:

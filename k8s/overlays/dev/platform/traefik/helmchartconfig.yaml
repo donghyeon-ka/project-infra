@@ -10,8 +10,15 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
 spec:
   valuesContent: |-
+    api:
+      dashboard: true
     deployment:
       replicas: 2
+    ingressRoute:
+      dashboard:
+        enabled: true
+        entryPoints:
+          - traefik
     service:
       spec:
         externalTrafficPolicy: Local
@@ -21,14 +28,13 @@ spec:
           enabled: false
       websecure:
         tls:
-          enabled: true
+          enabled: false
     ingressClass:
       enabled: true
       isDefaultClass: true
     additionalArguments:
       - "--providers.kubernetesingress.ingressclass=traefik"
       - "--metrics.prometheus=true"
-      - "--entrypoints.websecure.http.tls.options=kube-system-modern-tls@kubernetescrd"
     resources:
       requests:
         cpu: 100m

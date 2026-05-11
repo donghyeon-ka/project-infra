@@ -75,4 +75,6 @@ spec:
               v1.min.io/tenant: minio
       ports:
         - protocol: TCP
+          port: 443
+        - protocol: TCP
           port: 9000

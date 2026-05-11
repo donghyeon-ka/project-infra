@@ -1,9 +1,0 @@
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-
-namespace: mnt
-
-resources:
-  - project-com-certificate.yaml
-  - keycloak-dev-certificate.yaml
-  - registry-project-com-certificate.yaml

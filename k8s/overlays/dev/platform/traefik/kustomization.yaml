@@ -4,5 +4,6 @@ kind: Kustomization
 namespace: kube-system
 
 resources:
+  - dashboard-service.yaml
   - helmchartconfig.yaml
   - middleware.yaml

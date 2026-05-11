@@ -16,4 +16,4 @@ patches:
     patch: |-
       - op: replace
         path: /metadata/annotations/traefik.ingress.kubernetes.io~1router.middlewares
-        value: kube-system-https-redirect@kubernetescrd,mnt-oauth2-proxy-errors@kubernetescrd,mnt-oauth2-proxy-auth@kubernetescrd,kube-system-security-headers@kubernetescrd
+        value: mnt-oauth2-proxy-errors@kubernetescrd,mnt-oauth2-proxy-auth@kubernetescrd,kube-system-security-headers@kubernetescrd

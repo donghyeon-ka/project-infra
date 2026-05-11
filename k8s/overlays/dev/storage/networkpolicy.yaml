@@ -1,6 +1,62 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: minio-ingress-peer
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/instance: minio
+    app.kubernetes.io/component: object-storage
+    app.kubernetes.io/part-of: storage-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      v1.min.io/tenant: minio
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              v1.min.io/tenant: minio
+      ports:
+        - protocol: TCP
+          port: 9000
+        - protocol: TCP
+          port: 9001
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minio-ingress-operator
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/instance: minio
+    app.kubernetes.io/component: object-storage
+    app.kubernetes.io/part-of: storage-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      v1.min.io/tenant: minio
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: minio-operator
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: minio-operator
+              app.kubernetes.io/name: operator
+      ports:
+        - protocol: TCP
+          port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: minio-ingress-clients
   labels:
     app.kubernetes.io/name: minio
@@ -52,3 +108,33 @@ spec:
           port: 9000
         - protocol: TCP
           port: 9001
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minio-egress-kubernetes-api
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/instance: minio
+    app.kubernetes.io/component: object-storage
+    app.kubernetes.io/part-of: storage-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      v1.min.io/tenant: minio
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.43.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - ipBlock:
+            cidr: 10.208.141.0/24
+      ports:
+        - protocol: TCP
+          port: 6443

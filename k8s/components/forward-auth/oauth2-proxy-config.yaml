@@ -14,11 +14,11 @@ data:
     provider = "keycloak-oidc"
     http_address = "0.0.0.0:4180"
     metrics_address = "0.0.0.0:44180"
-    redirect_url = "https://project.com/oauth2/callback"
+    redirect_url = "http://project.com/oauth2/callback"
 
-    oidc_issuer_url = "https://keycloak.dev.example.com/realms/platform"
+    oidc_issuer_url = "http://keycloak.dev.example.com/realms/platform"
     skip_oidc_discovery = true
-    login_url = "https://keycloak.dev.example.com/realms/platform/protocol/openid-connect/auth"
+    login_url = "http://keycloak.dev.example.com/realms/platform/protocol/openid-connect/auth"
     redeem_url = "http://keycloak.mnt.svc.cluster.local/realms/platform/protocol/openid-connect/token"
     profile_url = "http://keycloak.mnt.svc.cluster.local/realms/platform/protocol/openid-connect/userinfo"
     validate_url = "http://keycloak.mnt.svc.cluster.local/realms/platform/protocol/openid-connect/userinfo"
@@ -32,7 +32,7 @@ data:
     email_domains = [ "*" ]
     scope = "openid profile email"
     skip_provider_button = true
-    cookie_secure = true
+    cookie_secure = false
     cookie_samesite = "lax"
     cookie_csrf_per_request = true
     set_xauthrequest = true

@@ -38,8 +38,8 @@ spec:
         directAccessGrantsEnabled: false
         serviceAccountsEnabled: false
         redirectUris:
-          - https://project.com/oauth2/callback
+          - http://project.com/oauth2/callback
         webOrigins:
-          - https://project.com
-        rootUrl: https://project.com
-        baseUrl: https://project.com
+          - http://project.com
+        rootUrl: http://project.com
+        baseUrl: http://project.com

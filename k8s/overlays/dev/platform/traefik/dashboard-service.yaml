@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik-dashboard
+  labels:
+    app.kubernetes.io/name: traefik
+    app.kubernetes.io/instance: traefik-dev
+    app.kubernetes.io/component: ingress-controller
+    app.kubernetes.io/part-of: platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: traefik
+    app.kubernetes.io/instance: traefik-kube-system
+  ports:
+    - name: admin
+      port: 8080
+      targetPort: traefik
+      protocol: TCP
+      appProtocol: http
