@@ -15,7 +15,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: keycloak.dev.example.com
+    - host: keycloak.local.test
       http:
         paths:
           - path: /realms/

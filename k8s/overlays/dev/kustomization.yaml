@@ -12,7 +12,6 @@ resources:
   - auth
   - keycloak
   - storage
-  - test
   - keycloak-realm
 
 components:

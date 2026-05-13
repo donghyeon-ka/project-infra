@@ -1,4 +1,4 @@
-# 운영 중 만난 함정 8건 — 사건 카탈로그
+# 운영 중 만난 함정 9건 — 사건 카탈로그
 
 K3s 기반 로컬 클러스터에서 Project-Infra 를 부트스트랩 / 운영하면서 실제로 만났던 사건들의 narrative 정리.
 운영자 절차서 톤은 [`guide.md`](../guide.md) 의 15장 (`15.1` ~ `15.11`) 에 있고, 이 문서는 사건 단위로 "무엇을 보고 / 왜 그랬고 / 어떻게 풀었는지" 를 짧게 쓰기 위한 자료다.
@@ -13,6 +13,7 @@ K3s 기반 로컬 클러스터에서 Project-Infra 를 부트스트랩 / 운영�
 | 6 | namespace 가 `Terminating` 에 걸림 | [15.9](../guide.md#159-namespace-가-terminating-에-걸림) |
 | 7 | PodSecurity 위반 경고 (admission) | [15.7](../guide.md#157-podsecurity-위반-경고) |
 | 8 | VSO 가 Vault 로그인 실패 | [15.2](../guide.md#152-vso-가-vault-에-로그인-실패) |
+| 9 | Registry 는 살아났지만 auth-server 새 이미지 pull 이 끝나지 않음 | (해결됨 — registries.yaml 제거 + hosts.toml 직접 작성) |
 
 ---
 
@@ -85,6 +86,314 @@ sudo crictl pull registry.project.com/<image>:<tag>
 
 - **K8s service DNS 가 보인다고 image pull 도 된다고 가정하지 말 것.** image pull 은 노드의 컨테이너 런타임이 직접 수행하고, 호스트 OS 의 resolver 를 따른다.
 - 사설 registry 를 클러스터 안에 두면 **bootstrap 순서 의존성** 이 생긴다 (registry 가 떠야 다른 이미지 pull 가능). 이 의존성은 mirror config / hosts 매핑으로만 풀린다.
+
+---
+
+## 9. Registry 는 살아났지만 auth-server 새 이미지 pull 이 끝나지 않음
+
+### 한 줄 요약
+
+`docker-registry` 자체는 MinIO S3 backend 설정 오류를 고쳐 정상화했고 `auth-server` 새 이미지는 registry 에 업로드했다. 하지만 K3s 노드의 containerd pull 경로는 아직 완전히 검증되지 않아, 새 `auth-server` Pod 는 `ImagePullBackOff` 상태로 남아 있다.
+
+### 배경
+
+- `auth-server` 에 Keycloak 사용자 정보를 token claim 에서 받아 간단히 저장하는 변경을 적용했다.
+- 로컬 빌드 태그는 `manual-20260512071751` 이고, 배포 대상 이미지는 `registry.project.com/auth-platform/auth-server:manual-20260512071751` 이다.
+- 현재 dev 클러스터 namespace 는 `mnt` 이며, `auth-server` Deployment 는 기존 `0.1.0` 이미지 Pod 1개가 계속 Running 중이다.
+- registry 는 `docker-registry` Deployment + MinIO bucket `docker-registry` 조합으로 동작한다.
+
+### 증상 1: registry Pod 가 readiness/liveness 에서 무너짐
+
+`docker-registry` Pod 가 `/v2/` probe 에서 일시적으로 `200` 을 반환하다가 `503` 으로 떨어지고 `CrashLoopBackOff` 로 진입했다.
+
+관찰된 설정:
+
+```yaml
+REGISTRY_STORAGE: "s3"
+REGISTRY_STORAGE_S3_REGIONENDPOINT: "https://minio.mnt.svc.cluster.local"
+```
+
+하지만 dev MinIO Service 는 HTTP 로 노출되어 있었다.
+
+```text
+service/minio
+port: 80
+targetPort: 9000
+```
+
+### Root Cause 1
+
+registry 의 S3 endpoint 가 `https://...` 로 설정되어 있었지만, 실제 MinIO Service 경로는 HTTP 였다. registry 가 storage health check 와 blob 접근에서 MinIO 에 정상 접근하지 못해 `/v2/` probe 가 실패했다.
+
+또한 endpoint 를 `http://minio` 로 바꾸면 registry egress NetworkPolicy 도 HTTP port `80` 을 허용해야 한다. 기존 policy 는 `443`, `9000` 만 열려 있었다.
+
+### 해결 1
+
+Git/Kustomize 원천 파일을 수정했다.
+
+변경 파일:
+
+- `k8s/base/plugins/docker-registry/configmap.yaml`
+- `k8s/overlays/dev/registry/networkpolicy.yaml`
+
+변경 내용:
+
+```yaml
+REGISTRY_STORAGE_S3_REGIONENDPOINT: "http://minio"
+REGISTRY_STORAGE_REDIRECT_DISABLE: "true"
+```
+
+```yaml
+ports:
+  - protocol: TCP
+    port: 80
+  - protocol: TCP
+    port: 443
+  - protocol: TCP
+    port: 9000
+```
+
+적용:
+
+```bash
+kubectl diff -k k8s/overlays/dev/registry
+kubectl apply -k k8s/overlays/dev/registry
+kubectl -n mnt rollout restart deployment/docker-registry
+kubectl -n mnt rollout status deployment/docker-registry --timeout=180s
+```
+
+검증 결과:
+
+```text
+deployment.apps/docker-registry   1/1   Available
+GET /v2/ HTTP/1.1                 200
+```
+
+### 증상 2: Docker push 가 포트포워딩에서 반복 실패
+
+`kubectl -n mnt port-forward svc/docker-registry 5000:5000` 후 `docker push localhost:5000/...` 를 시도했지만, Docker 의 동시 layer upload 와 `kubectl port-forward` 의 SPDY stream 이 맞물려 connection reset / timeout 이 반복됐다.
+
+대표 오류:
+
+```text
+write: connection reset by peer
+error creating error stream for port 5000 -> 5000: Timeout occurred
+```
+
+BuildKit builder 에 HTTP/insecure registry 설정을 넣어도 image exporter 가 `https://localhost:5000` 또는 `https://127.0.0.1:5000` 로 HEAD 요청을 시도해 실패했다.
+
+### Root Cause 2
+
+문제가 두 겹이었다.
+
+1. registry 의 기본 S3 redirect 가 켜져 있으면 client 가 `http://minio/...` presigned URL 로 직접 접근하려고 한다. 클러스터 밖 client 는 `minio` DNS 를 해석할 수 없다.
+2. Docker/BuildKit push 는 여러 blob stream 을 동시에 열고, 이 환경의 `kubectl port-forward` 가 긴 업로드 stream 을 안정적으로 유지하지 못했다.
+
+### 해결 2
+
+registry 에 `REGISTRY_STORAGE_REDIRECT_DISABLE: "true"` 를 추가해 client 가 MinIO 로 직접 redirect 되지 않게 했다.
+
+그 다음 Docker daemon 설정을 바꾸지 않기 위해, 이미지를 OCI tar 로 내보낸 뒤 Registry HTTP API 로 blob 과 manifest 를 순차 업로드했다.
+
+진행 요약:
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  --provenance=false \
+  --sbom=false \
+  -f deploy/docker/application/Dockerfile \
+  --output type=oci,dest=/tmp/auth-server-manual-20260512071751.oci.tar \
+  .
+
+# Registry HTTP API 로 auth-platform/auth-server:manual-20260512071751 업로드
+```
+
+검증:
+
+```text
+GET http://registry.project.com/v2/auth-platform/auth-server/tags/list
+{"name":"auth-platform/auth-server","tags":["manual-20260512071751"]}
+
+GET http://registry.project.com/v2/auth-platform/auth-server/manifests/manual-20260512071751
+200 application/vnd.oci.image.manifest.v1+json
+```
+
+### 증상 3: 새 auth-server Pod 가 TLS 오류로 image pull 실패
+
+Deployment image 를 새 태그로 변경했다.
+
+```bash
+kubectl -n mnt set image deployment/auth-server \
+  auth-server=registry.project.com/auth-platform/auth-server:manual-20260512071751
+```
+
+처음에는 kubelet 이 아래 오류를 냈다.
+
+```text
+failed to do request:
+Head "https://registry.project.com/v2/auth-platform/auth-server/manifests/manual-20260512071751":
+tls: failed to verify certificate:
+x509: certificate is valid for ...traefik.default, not registry.project.com
+```
+
+### Root Cause 3
+
+registry Ingress 에 TLS 가 붙어 있어서가 아니다. 현재 registry Ingress 는 HTTP `80` 으로 노출되어 있고 TLS secret 을 명시하지 않는다.
+
+문제는 containerd 의 기본 image pull 동작이다. `image: registry.project.com/...` 는 scheme 을 쓸 수 없고, containerd 는 기본적으로 `https://registry.project.com/v2/...` 를 먼저 호출한다. Traefik 의 `443` default/self-signed certificate 를 밟으면서 hostname mismatch 가 발생했다.
+
+### 해결 3
+
+각 K3s 노드의 `/etc/rancher/k3s/registries.yaml` 에 dev registry 를 HTTP/insecure registry 로 등록했다.
+
+```yaml
+mirrors:
+  registry.project.com:
+    endpoint:
+      - "http://registry.project.com"
+configs:
+  registry.project.com:
+    tls:
+      insecure_skip_verify: true
+```
+
+적용 대상:
+
+- `dev-wk-1`: `systemctl restart k3s-agent`
+- `dev-wk-2`: `systemctl restart k3s-agent`
+- `dev-cp-1`: `systemctl restart k3s`
+
+검증:
+
+```bash
+kubectl wait node/dev-wk-1 --for=condition=Ready --timeout=120s
+kubectl wait node/dev-wk-2 --for=condition=Ready --timeout=120s
+kubectl wait node/dev-cp-1 --for=condition=Ready --timeout=180s
+```
+
+이후 Pod event 에서 TLS certificate mismatch 오류는 사라졌다.
+
+### 증상 4: registries.yaml 을 HTTP 로 바꿨는데도 여전히 `not found`
+
+해결 3 으로 TLS cert mismatch 는 사라졌지만, 새 Pod 는 여전히 `ImagePullBackOff` 였다. 메시지가 바뀌었다.
+
+```text
+Failed to pull image "registry.project.com/auth-platform/auth-server:manual-20260512071751":
+rpc error: code = NotFound desc =
+failed to resolve reference "...":
+registry.project.com/auth-platform/auth-server:manual-20260512071751: not found
+```
+
+진단 절차에서 확인된 사실:
+
+- registry 에 자격증명 + OCI Accept 헤더로 curl 하면 manifest 200 OK.
+- `imagePullSecrets` 는 `auth-server-sa` 와 Pod spec 양쪽에 정상 박힘.
+- `crictl pull --creds testuser:...` 도 동일하게 `not found`.
+- **`ctr images pull --plain-http --user testuser:...` 만 정상 동작.**
+- registry access log 에 ImagePullBackOff Pod 시도 시 manifest 호출 자체가 안 도착.
+
+→ containerd 가 registry 까지 HTTP 호출을 시도조차 하지 않는 상태. ctr 의 `--plain-http` 플래그가 결정적이라는 건 **containerd 가 HTTP scheme 을 인식하지 못하고 있음** 을 의미했다.
+
+K3s 가 자동 생성한 hosts.toml 을 직접 확인했더니 원인이 드러났다.
+
+```toml
+# /var/lib/rancher/k3s/agent/etc/containerd/certs.d/registry.project.com/hosts.toml
+# File generated by k3s. DO NOT EDIT.
+server = "https://registry.project.com/v2"      # ← origin 은 HTTPS 강제
+capabilities = ["pull", "resolve", "push"]
+skip_verify = true
+
+[host."http://registry.project.com/v2"]         # ← mirror 만 HTTP
+  capabilities = ["pull", "resolve"]
+  skip_verify = true
+```
+
+### Root Cause 4
+
+K3s 1.34 + containerd 2.x 환경에서 `registries.yaml` → `hosts.toml` 자동 변환 동작:
+
+1. **`mirrors.<host>.endpoint`** 는 `[host."<endpoint>"]` 블록으로 그대로 옮겨진다 (HTTP scheme 보존).
+2. 그러나 **최상위 `server`** 는 `host` 이름 기준으로 `https://<host>/v2` 가 강제된다 — registry 가 default 로 HTTPS 라는 가정.
+3. containerd 는 mirror 가 fail 하거나 manifest 협상 실패 시 `server` 로 fallback. 우리 registry 는 origin 도 HTTP 라서 fallback 이 cert mismatch 또는 connection 실패로 끝남.
+4. 추가로 endpoint URL 에 `/v2` path 까지 박혀 있다. containerd hosts.toml 명세상 `[host."<URL>"]` 의 URL 은 scheme + host 만 허용, path 는 host matcher 를 깨뜨릴 수 있다.
+
+즉 **registry 가 HTTPS 인 일반 환경을 가정한 K3s 의 자동 변환 로직이, HTTP-only registry 환경과 불일치** 를 일으킨 것이다.
+
+### 해결 4
+
+K3s 의 hosts.toml 자동 생성 자체를 끄고 직접 작성해야 한다. K3s 는 `/etc/rancher/k3s/registries.yaml` 이 존재하는 한 무조건 hosts.toml 을 재생성한다 (재시작 시 사용자 작성을 덮어씀).
+
+각 노드에서:
+
+```bash
+# 1) 자동 생성을 막기 위해 registries.yaml 비활성화
+sudo mv /etc/rancher/k3s/registries.yaml /etc/rancher/k3s/registries.yaml.bak
+
+# 2) hosts.toml 직접 작성
+sudo mkdir -p /var/lib/rancher/k3s/agent/etc/containerd/certs.d/registry.project.com
+sudo tee /var/lib/rancher/k3s/agent/etc/containerd/certs.d/registry.project.com/hosts.toml > /dev/null <<'EOF'
+server = "http://registry.project.com"
+
+[host."http://registry.project.com"]
+  capabilities = ["pull", "resolve", "push"]
+  skip_verify = true
+
+  [host."http://registry.project.com".auth]
+    username = "testuser"
+    password = "abcd6845"
+EOF
+
+# 3) 적용
+sudo systemctl restart k3s-agent   # 워커 노드
+sudo systemctl restart k3s         # control-plane
+```
+
+핵심 차이:
+
+- `server` 도 `http://` 명시 → fallback 도 HTTP.
+- endpoint URL 에서 `/v2` path 제거.
+- `auth` 를 hosts.toml 에 박아 `imagePullSecrets` 와 무관하게 노드 단에서 인증 자동 첨부.
+
+### 검증
+
+```bash
+# 노드의 registry 연결 직접 검증
+sudo /usr/local/bin/k3s ctr -a /run/k3s/containerd/containerd.sock \
+  images pull --plain-http --user 'testuser:abcd6845' \
+  registry.project.com/auth-platform/auth-server:manual-20260512071751
+
+# Pod 가 새 이미지로 정상 Running 되는지
+kubectl -n mnt get pod -l app.kubernetes.io/name=auth-server \
+  -o custom-columns='NAME:.metadata.name,READY:.status.containerStatuses[0].ready,IMAGE:.spec.containers[0].image'
+# → READY=true, IMAGE=...:manual-20260512071751
+
+# registry pod 의 access log 에서 containerd 호출 확인
+kubectl -n mnt logs deployment/docker-registry --tail=50 | grep "containerd/v"
+# → "useragent": "containerd/v2.2.2-bd1.34" 가 manifests/blobs 호출에 보이면 OK
+```
+
+### 이전 항목과의 관계 — 같은 증상, 다른 root cause
+
+이번 사건은 표면 증상이 [#1](#1-registry-image-pull-실패-imagepullbackoff) 과 비슷해 보이지만 실제 원인 layer 가 다르다.
+
+| 항목 | 시점의 환경 | 원인 layer | 해결 |
+|---|---|---|---|
+| #1 | registry 가 HTTPS (사설 인증서) | 노드 호스트 OS 가 `registry.project.com` 을 DNS 해석 못 함 | `/etc/hosts` 또는 `registries.yaml` mirror endpoint |
+| #9 해결 3 | registry 를 **HTTP-only 로 변경**한 직후 | containerd 가 default HTTPS 로 시도 → cert mismatch | `registries.yaml` 의 endpoint 를 `http://...` 로 |
+| #9 해결 4 (이번) | 위 변경 후에도 남아 있던 문제 | K3s 자동 생성 hosts.toml 의 `server` 가 여전히 `https://` 강제 + `/v2` path 포함 | `registries.yaml` 제거 + `hosts.toml` 직접 작성 |
+
+→ **#1 의 해결이 잘못됐던 것이 아니다**. #1 은 그 시점 (registry HTTPS) 의 정확한 fix 였고 한동안 정상 동작했다. registry 를 HTTP-only 로 변경하면서 새 layer 의 호환성 문제가 드러난 것이며, K3s + containerd 2.x 의 자동 변환 로직이 HTTP-only origin 을 상정하지 않은 것이 진짜 원인이다.
+
+### 교훈
+
+- registry Pod 의 `/v2/` readiness 가 `200` 이라고 해서 push/pull 경로 전체가 정상인 것은 아니다. S3 backend, redirect, NetworkPolicy, ingress auth, containerd mirror 설정을 분리해서 봐야 한다.
+- registry 를 MinIO S3 backend 로 둘 때 클러스터 밖 client 가 접근할 수 없는 내부 DNS 로 redirect 되지 않게 `REGISTRY_STORAGE_REDIRECT_DISABLE` 를 검토해야 한다.
+- dev 에서 TLS 를 의도적으로 빼더라도 containerd 는 registry 를 기본 HTTPS 로 당긴다. `image:` 필드에는 `http://` scheme 을 넣을 수 없다.
+- **K3s 의 `registries.yaml` 자동 변환은 registry 가 HTTPS 라는 가정을 깔고 동작한다**. HTTP-only registry 인 경우 자동 변환을 끄고 (`registries.yaml` 제거) `hosts.toml` 을 직접 작성해야 `server` URL scheme 을 통제할 수 있다.
+- 진단 시 `crictl pull` 과 `ctr pull` 의 차이 (특히 `--plain-http` 동작 여부) 를 비교하면 containerd 가 HTTP scheme 을 인식하고 있는지 빠르게 분리할 수 있다.
+- 같은 증상이 다시 나타날 때, 이전 사건의 해결책을 그대로 적용하기 전에 **그 시점의 환경 가정과 현재 환경이 같은지** 부터 확인해야 한다. 표면 증상이 같아도 layer 가 다른 경우가 흔하다.
+- 노드 런타임 설정은 K8s resource 가 아니므로, 임시 `kubectl debug node` 변경은 반드시 후속으로 운영 source-of-truth (Ansible / Fleet / cloud-init) 에 반영해야 한다. Kustomize manifest 로는 이 파일을 관리하지 않는다.
 
 ---
 

@@ -12,7 +12,7 @@ resources:
 images:
   - name: registry.example.com/auth-platform/auth-server
     newName: registry.project.com/auth-platform/auth-server
-    newTag: 0.1.0
+    newTag: manual-20260512071751
 
 patches:
   - target:
@@ -21,13 +21,16 @@ patches:
     patch: |-
       - op: add
         path: /data/APP_SECURITY_KEYCLOAK_ISSUER_URI
-        value: http://keycloak.dev.example.com/realms/platform
+        value: http://keycloak.local.test/realms/platform
       - op: add
         path: /data/SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI
-        value: http://keycloak.dev.example.com/realms/platform
+        value: http://keycloak.local.test/realms/platform
       - op: add
         path: /data/SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI
         value: http://keycloak/realms/platform/protocol/openid-connect/certs
+      - op: add
+        path: /data/SERVER_MAX_HTTP_REQUEST_HEADER_SIZE
+        value: 64KB
   - target:
       kind: ServiceAccount
       name: auth-server-sa

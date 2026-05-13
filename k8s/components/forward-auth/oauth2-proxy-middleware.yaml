@@ -36,10 +36,9 @@ metadata:
 spec:
   errors:
     status:
-      - "401-403"
+      - "401"
     statusRewrites:
       "401": 302
-      "403": 302
     service:
       name: oauth2-proxy
       port: 4180

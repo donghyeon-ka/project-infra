@@ -20,13 +20,14 @@ spec:
     realm: platform
     enabled: true
     sslRequired: external
-    registrationAllowed: false
+    registrationAllowed: true
     loginWithEmailAllowed: true
     accessTokenLifespan: 300
+    defaultRoles:
+      - user
     roles:
       realm:
-        - name: platform-admin
-        - name: platform-user
+        - name: user
     clients:
       - clientId: auth-server-ingress
         name: auth-server-ingress
@@ -37,9 +38,25 @@ spec:
         standardFlowEnabled: true
         directAccessGrantsEnabled: false
         serviceAccountsEnabled: false
+        defaultClientScopes:
+          - profile
+          - email
+          - roles
+        protocolMappers:
+          - name: realm roles in id token
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-realm-role-mapper
+            config:
+              user.attribute: foo
+              claim.name: realm_access.roles
+              jsonType.label: String
+              multivalued: "true"
+              access.token.claim: "true"
+              id.token.claim: "true"
+              introspection.token.claim: "true"
         redirectUris:
-          - http://project.com/oauth2/callback
+          - http://auth.local.test/oauth2/callback
         webOrigins:
-          - http://project.com
-        rootUrl: http://project.com
-        baseUrl: http://project.com
+          - http://auth.local.test
+        rootUrl: http://auth.local.test
+        baseUrl: http://auth.local.test

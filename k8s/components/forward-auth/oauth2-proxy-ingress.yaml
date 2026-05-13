@@ -15,7 +15,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: project.com
+    - host: auth.local.test
       http:
         paths:
           - path: /oauth2/
