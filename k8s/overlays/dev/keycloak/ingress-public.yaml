@@ -11,7 +11,7 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web
-    traefik.ingress.kubernetes.io/router.middlewares: kube-system-security-headers@kubernetescrd # 응답 처리 중간에 적용할 Traefik middleware 목록
+    traefik.ingress.kubernetes.io/router.middlewares: mnt-keycloak-security-headers@kubernetescrd # frameDeny 제외 — admin 콘솔의 silent SSO iframe 허용
 spec:
   ingressClassName: traefik
   rules:
