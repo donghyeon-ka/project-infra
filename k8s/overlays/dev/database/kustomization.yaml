@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mnt
+
+resources:
+  - ../../../base/app/identity/auth/stateful/identity-postgres
+  - vault-secrets.yaml
+  - networkpolicy.yaml
+
+patches:
+  - target:
+      kind: StatefulSet
+      name: identity-postgres
+    patch: |-
+      - op: replace
+        path: /spec/persistentVolumeClaimRetentionPolicy/whenDeleted
+        value: Delete
+      - op: replace
+        path: /spec/persistentVolumeClaimRetentionPolicy/whenScaled
+        value: Delete

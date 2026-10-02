@@ -1,0 +1,174 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: identity-postgres
+  labels:
+    app.kubernetes.io/name: identity-postgres
+    app.kubernetes.io/instance: identity-postgres
+    app.kubernetes.io/version: "16.4"
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: auth-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  replicas: 1
+  serviceName: identity-postgres-headless
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: identity-postgres
+      app.kubernetes.io/instance: identity-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: identity-postgres
+        app.kubernetes.io/instance: identity-postgres
+        app.kubernetes.io/version: "16.4"
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: auth-platform
+        app.kubernetes.io/managed-by: kustomize
+    spec:
+      serviceAccountName: identity-postgres-sa
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: postgres:16.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_DB
+              value: postgres
+            - name: POSTGRES_USER_FILE
+              value: /run/secrets/superuser/username
+            - name: POSTGRES_PASSWORD_FILE
+              value: /run/secrets/superuser/password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: KEYCLOAK_DB_PASSWORD_FILE
+              value: /run/secrets/keycloak-db/password
+            - name: AUTH_SERVER_DB_PASSWORD_FILE
+              value: /run/secrets/auth-server-db/SPRING_DATASOURCE_PASSWORD
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$(cat "$POSTGRES_USER_FILE")"
+            periodSeconds: 5
+            failureThreshold: 60
+            timeoutSeconds: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$(cat "$POSTGRES_USER_FILE")"
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$(cat "$POSTGRES_USER_FILE")"
+            periodSeconds: 30
+            failureThreshold: 3
+            timeoutSeconds: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: superuser
+              mountPath: /run/secrets/superuser
+              readOnly: true
+            - name: keycloak-db
+              mountPath: /run/secrets/keycloak-db
+              readOnly: true
+            - name: auth-server-db
+              mountPath: /run/secrets/auth-server-db
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: run
+              mountPath: /var/run/postgresql
+      volumes:
+        - name: initdb
+          configMap:
+            name: identity-postgres-initdb
+            defaultMode: 0755
+        - name: superuser
+          secret:
+            secretName: identity-postgres-superuser
+            defaultMode: 0400
+        - name: keycloak-db
+          secret:
+            secretName: keycloak-db
+            defaultMode: 0400
+        - name: auth-server-db
+          secret:
+            secretName: auth-server-db
+            defaultMode: 0400
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+        - name: run
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: identity-postgres
+          app.kubernetes.io/instance: identity-postgres
+          app.kubernetes.io/version: "16.4"
+          app.kubernetes.io/component: database
+          app.kubernetes.io/part-of: auth-platform
+          app.kubernetes.io/managed-by: kustomize
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: local-path
+        volumeMode: Filesystem
+        resources:
+          requests:
+            storage: 5Gi

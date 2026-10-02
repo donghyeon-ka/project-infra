@@ -1,0 +1,92 @@
+apiVersion: minio.min.io/v2
+kind: Tenant
+metadata:
+  name: minio
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/instance: minio
+    app.kubernetes.io/version: "2025.01.20"
+    app.kubernetes.io/component: object-storage
+    app.kubernetes.io/part-of: storage-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+  imagePullPolicy: IfNotPresent
+  mountPath: /export
+  configuration:
+    name: minio-tenant-env
+  requestAutoCert: true
+  certConfig:
+    commonName: minio
+    organizationName:
+      - example.com
+    dnsNames:
+      - minio
+      - minio-hl
+  pools:
+    - name: pool-0
+      servers: 4
+      volumesPerServer: 1
+      volumeClaimTemplate:
+        metadata:
+          name: data
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 20Gi
+          storageClassName: local-path
+      resources:
+        requests:
+          cpu: 250m
+          memory: 1Gi
+        limits:
+          cpu: "1"
+          memory: 2Gi
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containerSecurityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+  features:
+    bucketDNS: false
+  prometheusOperator: false
+  podManagementPolicy: Parallel
+  exposeServices:
+    minio: false
+    console: false
+  logging:
+    anonymous: false
+    json: true
+    quiet: false
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: minio-pdb
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/instance: minio
+    app.kubernetes.io/version: "2025.01.20"
+    app.kubernetes.io/component: object-storage
+    app.kubernetes.io/part-of: storage-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  maxUnavailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      v1.min.io/tenant: minio

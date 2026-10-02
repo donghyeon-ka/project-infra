@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: auth-server
+  labels:
+    app.kubernetes.io/name: auth-server
+    app.kubernetes.io/instance: auth-server
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: auth-platform
+    app.kubernetes.io/managed-by: kustomize
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: kube-system-security-headers@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: auth.local.test
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-server
+                port:
+                  name: http

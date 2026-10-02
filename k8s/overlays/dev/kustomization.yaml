@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mnt
+
+resources:
+  - ../../base/managing
+  - networkpolicy-baseline.yaml
+  - vault
+  - registry
+  - database
+  - auth
+  - keycloak
+  - storage
+  - keycloak-realm
+
+components:
+  - ../../components/forward-auth

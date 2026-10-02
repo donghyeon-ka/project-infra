@@ -1,0 +1,44 @@
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  labels:
+    app.kubernetes.io/name: traefik
+    app.kubernetes.io/instance: traefik-dev
+    app.kubernetes.io/component: ingress-controller
+    app.kubernetes.io/part-of: platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  valuesContent: |-
+    api:
+      dashboard: true
+    deployment:
+      replicas: 2
+    ingressRoute:
+      dashboard:
+        enabled: true
+        entryPoints:
+          - traefik
+    service:
+      spec:
+        externalTrafficPolicy: Local
+    ports:
+      web:
+        tls:
+          enabled: false
+      websecure:
+        tls:
+          enabled: false
+    ingressClass:
+      enabled: true
+      isDefaultClass: true
+    additionalArguments:
+      - "--providers.kubernetesingress.ingressclass=traefik"
+      - "--metrics.prometheus=true"
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
